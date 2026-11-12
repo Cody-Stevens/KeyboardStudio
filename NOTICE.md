@@ -53,6 +53,31 @@ runtime.
 publishes for the Linky87. It is not part of the-via/keyboards. It is included
 unchanged, apart from line endings, so the keyboard works without a download.
 
+## Runtime libraries
+
+These npm packages are bundled into the site. Their licences allow that.
+
+| Package | Licence | Used for |
+| --- | --- | --- |
+| `react`, `react-dom` | MIT | The UI |
+| `nanostores`, `@nanostores/react` | MIT | State |
+| `three` | MIT, Copyright 2010-2026 three.js authors | The 3D keyboard (loaded as its own chunk) |
+
+## Fonts
+
+| Font | Package | Licence |
+| --- | --- | --- |
+| Barlow (400, 500, 600), Latin subset | `@fontsource/barlow` | SIL Open Font License 1.1, Copyright 2017 The Barlow Project Authors |
+| Barlow Semi Condensed (500, 600), Latin subset | `@fontsource/barlow-semi-condensed` | SIL Open Font License 1.1, Copyright 2017 The Barlow Project Authors |
+
+The font files are served from the site itself; no font is loaded from a
+third-party server.
+
+## Development tools
+
+Playwright (`@playwright/test`, Apache-2.0) runs the end-to-end flows in
+`e2e/`. It is not part of the site.
+
 ## Not ported
 
 `@the-via/pelpi` (the `showIf` parser VIA uses) is not used. Its npm package

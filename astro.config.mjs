@@ -10,4 +10,7 @@ export default defineConfig({
   integrations: [react()],
   server: {port: 4321, host: '127.0.0.1'},
   devToolbar: {enabled: false},
+  // three.js (about 590 KB raw, 148 KB gzip) loads as its own chunk after the
+  // page is usable, so a chunk that size is expected.
+  vite: {build: {chunkSizeWarningLimit: 650}},
 });

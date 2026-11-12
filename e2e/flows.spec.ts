@@ -352,6 +352,14 @@ test('laptop and phone sizes', async ({browser}) => {
   await expect(noGl.getByText('This browser cannot draw 3D')).toBeVisible();
   await noGl.close();
 
+  const dark = await browser.newPage({viewport: {width: 1600, height: 1000}, colorScheme: 'dark'});
+  await dark.goto('/?mock=1');
+  await expect(dark.getByTestId('lamp')).toHaveAttribute('data-state', 'idle');
+  await dark.getByTestId('tab-lighting').click();
+  await dark.waitForTimeout(2600);
+  await shot(dark, 'dark-mode-lighting');
+  await dark.close();
+
   const phone = await browser.newPage({viewport: {width: 390, height: 844}, isMobile: true, hasTouch: true});
   await phone.goto('/?mock=1');
   await expect(phone.getByTestId('flat-board')).toBeVisible();

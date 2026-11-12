@@ -888,7 +888,10 @@ export class KeyboardScene {
     // Keys.
     const matrix = new THREE.Matrix4();
     const color = new THREE.Color();
-    const back = this.lights.backlight;
+    // With reduced motion, animated previews hold a still: breathing at full, cycles where they start.
+    const lit = this.lights.backlight;
+    const back = lit && this.reducedMotion && lit.animated ? {...lit, mode: lit.mode === 'breathing' ? ('solid' as const) : lit.mode, animated: false} : lit;
+    const timeMs = this.reducedMotion ? 0 : nowMs;
     if (back?.animated) {
       active = true;
     }
@@ -936,7 +939,7 @@ export class KeyboardScene {
       const highlight = isSelected ? 0.35 : this.focused === key.matrix ? 0.7 : this.hover === key.matrix ? 0.25 : 0;
       state.group.highlight.setX(state.slot, highlight);
 
-      const rgb = back ? backlightColor(back, {nx: key.nx, ny: key.ny, isMod: this.modByIndex[key.index] ?? false}, nowMs) : [0, 0, 0];
+      const rgb = back ? backlightColor(back, {nx: key.nx, ny: key.ny, isMod: this.modByIndex[key.index] ?? false}, timeMs) : [0, 0, 0];
       const gain = lightsWake * this.partGain.backlight;
       const r = rgb[0] * gain;
       const g = rgb[1] * gain;

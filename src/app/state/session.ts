@@ -80,7 +80,8 @@ let mockTransport: MockTransport | null = null;
 const makeMockTransport = (): MockTransport => {
   mockKeyboard ??= new MockKeyboard(linky87Seed());
   const transport = new MockTransport(mockKeyboard, {
-    latency: env.mockLatency > 0 ? env.mockLatency : {minMs: 2, maxMs: 9},
+    // About what the real Linky87 answers in (2.1 ms per report, measured 2026-11-12).
+    latency: env.mockLatency > 0 ? env.mockLatency : {minMs: 1, maxMs: 3},
     info: {vendorId: LINKY87_VENDOR_ID, productId: LINKY87_PRODUCT_ID, productName: 'Linky87 (demo)'},
     ...(env.mockFailRate > 0
       ? {failures: [{mode: 'send-error' as const, match: (r: Uint8Array) => WRITE_COMMANDS.includes(r[0] ?? 0) && Math.random() < env.mockFailRate}]}
