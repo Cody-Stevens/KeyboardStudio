@@ -1,0 +1,13 @@
+// Static site only: a Worker with no script that serves the built files.
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "keyboard-studio",
+  "account_id": "1d56d359bd2640c0d15c9295cda2ca39",
+  "compatibility_date": "2026-11-01",
+  "assets": {
+    "directory": "./dist"
+  },
+  "routes": [{ "pattern": "keyboard.codystevens.studio", "custom_domain": true }],
+  "workers_dev": false,
+  "preview_urls": false
+}
