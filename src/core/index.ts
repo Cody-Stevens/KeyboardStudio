@@ -53,7 +53,7 @@ export type {
   MenuNode,
   MenuText,
 } from './definitions/types.ts';
-export {parseDefinition, collectControls} from './definitions/parse.ts';
+export {parseDefinition, collectControls, preloadDefinitionParser} from './definitions/parse.ts';
 export {decodeLayoutOptions, encodeLayoutOptions, matrixIndex, visibleKeys} from './definitions/layout.ts';
 export {evaluateShowIf, parseShowIf, type ShowIfValues} from './definitions/show-if.ts';
 export {

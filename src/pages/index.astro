@@ -1,0 +1,71 @@
+---
+import DebugPanel from '../debug/DebugPanel.tsx';
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex" />
+    <title>KeyboardStudio debug</title>
+    <style is:global>
+      :root {
+        color-scheme: light dark;
+        font-family: system-ui, sans-serif;
+        line-height: 1.4;
+      }
+      body {
+        margin: 0 auto;
+        max-width: 1200px;
+        padding: 16px;
+      }
+      pre,
+      code,
+      input,
+      select,
+      textarea {
+        font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+        font-size: 13px;
+      }
+      pre {
+        overflow-x: auto;
+        padding: 8px;
+        border: 1px solid #8884;
+      }
+      section {
+        margin-block: 20px;
+      }
+      fieldset {
+        margin-block: 8px;
+      }
+      table {
+        border-collapse: collapse;
+      }
+      td,
+      th {
+        padding: 2px 8px;
+        border-bottom: 1px solid #8883;
+        text-align: left;
+        vertical-align: top;
+      }
+      .pending {
+        color: #b07d00;
+      }
+      .failed {
+        color: #c62828;
+      }
+      .saved {
+        color: #2e7d32;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>KeyboardStudio debug page</h1>
+    <p>
+      A plain page that exercises the core. Add <code>?mock=1</code> to use the in-memory Linky87 instead of a real keyboard.
+      Other options: <code>&amp;latency=2</code> (mock reply delay in ms), <code>&amp;fail=0.1</code> (mock failure rate for writes).
+    </p>
+    <DebugPanel client:only="react" />
+  </body>
+</html>

@@ -46,6 +46,15 @@ export const loadReader = (): Promise<Reader> => {
   return readerPromise;
 };
 
+/**
+ * Starts loading the definition parser in the background. The first load
+ * compiles @the-via/reader's JSON schemas, which takes a few hundred
+ * milliseconds; call this at page load so the first connect does not wait.
+ */
+export const preloadDefinitionParser = (): void => {
+  void loadReader().catch(() => undefined);
+};
+
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
