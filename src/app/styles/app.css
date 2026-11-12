@@ -1126,6 +1126,14 @@ input[type='range'] {
 .zone-head h3 {
   font-size: 17px;
 }
+.zone-title {
+  flex: 1;
+  min-width: 0;
+}
+.zone-status {
+  text-align: right;
+  max-width: 50%;
+}
 .zone-swatch {
   width: 24px;
   height: 24px;
@@ -1563,8 +1571,15 @@ select {
     min-height: 100dvh;
   }
   .brand-name,
-  .board-chip .tag {
+  .board-chip {
     display: none;
+  }
+  .topbar {
+    gap: 6px;
+    padding: 0 8px;
+  }
+  .topbar .button {
+    padding: 0 8px;
   }
   .lamp-text {
     max-width: 30vw;

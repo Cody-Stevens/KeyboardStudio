@@ -221,8 +221,16 @@ test('every editing flow on the demo keyboard', async ({page}) => {
   expect(fps).toBeGreaterThan(20);
 
   // Clicking the logo on the model focuses its panel.
-  await page.getByTestId('tab-keys').click();
-  await page.getByTestId('tab-lighting').click();
+  const logo = await page.evaluate(
+    () => (window as unknown as {__keyboardScene: {partScreenPosition: (p: string) => {x: number; y: number} | null}}).__keyboardScene.partScreenPosition('logo'),
+  );
+  const canvasBox = await page.getByTestId('board-3d').boundingBox();
+  if (!logo || !canvasBox) {
+    throw new Error('The logo is not on screen');
+  }
+  await page.mouse.click(canvasBox.x + logo.x, canvasBox.y + logo.y);
+  await expect(page.getByTestId('zone-logo')).toHaveClass(/focused/);
+  await expect(page.getByTestId('control-id_qmk_rgblight_effect')).toBeFocused();
 
   // Macros: name, record, "Save and put on a key", click the key.
   await page.getByTestId('tab-macros').click();
@@ -288,7 +296,8 @@ test('every editing flow on the demo keyboard', async ({page}) => {
   await idle(page);
   await expect(page.getByTestId('lamp')).toHaveAttribute('data-state', 'failed');
   await expect(page.getByTestId('log-entry').first()).toHaveAttribute('data-state', 'failed');
-  await expect(page.getByTestId('key-sentence')).toContainText('Did not save.');
+  await expect(page.getByTestId('key-sentence')).toContainText('Caps Lock on Windows was not changed to Tab.');
+  await expect(page.getByTestId('log-entry').first()).toContainText('Caps Lock is back to Ctrl + C.');
   expect((await mockKeymap(page))[0]?.[3]?.[0]).toBe(0x0106);
   await shot(page, 'failed-write-rolled-back');
 
@@ -325,7 +334,23 @@ test('laptop and phone sizes', async ({browser}) => {
   const stage = await laptop.locator('.stage').boundingBox();
   expect(stage?.height ?? 0).toBeGreaterThan(280);
   await shot(laptop, 'laptop-1280x720');
+
+  // A weak GPU: slow frames switch the page to the flat board, with a way back.
+  await laptop.evaluate(() =>
+    (window as unknown as {__keyboardScene: {checkFrameTimes: (s: number[]) => void}}).__keyboardScene.checkFrameTimes(Array.from({length: 20}, () => 0.1)),
+  );
+  await expect(laptop.getByTestId('flat-board')).toBeVisible();
+  await expect(laptop.getByText('3D ran slowly on this computer')).toBeVisible();
+  await laptop.getByRole('button', {name: 'Try 3D again'}).click();
+  await expect(laptop.getByTestId('board-3d')).toBeVisible();
   await laptop.close();
+
+  // No WebGL at all: the flat board, said plainly.
+  const noGl = await browser.newPage({viewport: {width: 1280, height: 720}});
+  await noGl.goto('/?mock=1&webgl=0');
+  await expect(noGl.getByTestId('flat-board')).toBeVisible();
+  await expect(noGl.getByText('This browser cannot draw 3D')).toBeVisible();
+  await noGl.close();
 
   const phone = await browser.newPage({viewport: {width: 390, height: 844}, isMobile: true, hasTouch: true});
   await phone.goto('/?mock=1');

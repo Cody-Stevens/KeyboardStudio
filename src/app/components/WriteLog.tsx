@@ -38,7 +38,7 @@ export function WriteLog() {
                 </p>
                 <p className="entry-text">
                   {entry.swatch && <span className="entry-swatch" style={{background: entry.swatch}} aria-hidden="true" />}
-                  {entry.text}
+                  {status.state === 'failed' ? entry.failText : entry.text}
                 </p>
                 {status.state === 'failed' && <p className="entry-fail">{entry.rollbackText}</p>}
                 {entry.undo && entry.undoneBy === undefined && status.state === 'saved' && (

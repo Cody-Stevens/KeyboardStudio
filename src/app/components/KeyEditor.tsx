@@ -72,7 +72,7 @@ export function KeyEditor({session}: {readonly session: SessionView}) {
         <div className="sentence" aria-live="polite" data-testid="key-sentence">
           {fresh && entry && status ? (
             <>
-              <p className="sentence-text">{status.state === 'failed' ? <>Did not save. {entry.rollbackText}</> : entry.text}</p>
+              <p className="sentence-text">{status.state === 'failed' ? `${entry.failText} ${entry.rollbackText}` : entry.text}</p>
               <p className="sentence-status">
                 <StatusText status={status} />
                 {status.state === 'saved' && entry.undo && (

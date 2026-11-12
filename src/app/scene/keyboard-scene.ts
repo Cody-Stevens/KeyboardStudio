@@ -223,6 +223,9 @@ export class KeyboardScene {
         state.swapAt = null;
         return;
       }
+      if (state.pendingArt && sameArt(state.pendingArt, art)) {
+        return; // Already on its way.
+      }
       if (wave && state.art !== null) {
         state.pendingArt = art;
         state.swapAt = this.clock + state.key.nx * 0.32;
@@ -794,20 +797,42 @@ export class KeyboardScene {
     }
   };
 
-  /** Watches frame times while animating; reports once if the GPU cannot keep up. */
+  /** Watches frame times while animating; checks each second of continuous animation. */
   private measure(dt: number): void {
     this.frameTimes.push(dt);
-    if (this.frameTimes.length < 45) {
+    const total = this.frameTimes.reduce((sum, value) => sum + value, 0);
+    if (this.frameTimes.length < 8 || total < 1) {
       return;
     }
-    const sorted = [...this.frameTimes].sort((a, b) => a - b);
-    const median = sorted[Math.floor(sorted.length / 2)] ?? 0.016;
-    this.fps = Math.round(1 / median);
+    this.checkFrameTimes(this.frameTimes);
     this.frameTimes = [];
+  }
+
+  /**
+   * Reports once (onSlow) when the median frame takes longer than 1/18 s,
+   * so the page can switch to the flat board. Public so tests can feed it
+   * frame times from a slow machine.
+   */
+  checkFrameTimes(samples: readonly number[]): void {
+    const sorted = [...samples].sort((a, b) => a - b);
+    const median = sorted[Math.floor(sorted.length / 2)] ?? 1 / 60;
+    this.fps = Math.round(1 / median);
     if (median > 1 / 18 && !this.slowReported) {
       this.slowReported = true;
       this.hooks.onSlow(this.fps);
     }
+  }
+
+  /** Where a lit part (logo, side strip) is on the canvas, in CSS pixels. */
+  partScreenPosition(part: BoardPart): {x: number; y: number} | null {
+    const mesh = part === 'logo' ? this.logo?.hit : part === 'side' ? this.side?.strips[0] : undefined;
+    if (!mesh) {
+      return null;
+    }
+    this.board.updateMatrixWorld();
+    this.camera.updateMatrixWorld();
+    const point = mesh.getWorldPosition(new THREE.Vector3()).project(this.camera);
+    return {x: ((point.x + 1) / 2) * this.viewportW, y: ((1 - point.y) / 2) * this.viewportH};
   }
 
   private update(dt: number, nowMs: number): boolean {

@@ -113,8 +113,11 @@ export function Board3D(props: Board3DProps) {
     };
   }, [model]);
 
+  // Switching layers flips the changed caps in a wave; any other change draws at once.
+  const shownLayer = useRef(layer);
   useEffect(() => {
-    scene.current?.setLegends(arts, true);
+    scene.current?.setLegends(arts, shownLayer.current !== layer);
+    shownLayer.current = layer;
   }, [arts, layer]);
 
   useEffect(() => {

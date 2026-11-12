@@ -113,10 +113,15 @@ function ZonePanel({zone, session, focused}: {readonly zone: BoardZone; readonly
     >
       <header className="zone-head">
         <span className="zone-swatch" style={{background: swatch}} aria-hidden="true" />
-        <div>
+        <div className="zone-title">
           <h3 id={`zone-${zone.zone.id}`}>{zone.name}</h3>
           <p className="muted small">{zone.description}</p>
         </div>
+        {entry && status && (
+          <p className="small zone-status" aria-live="polite">
+            <StatusText status={status} />
+          </p>
+        )}
       </header>
       <div className="zone-controls">
         {visible.map((control) => (
@@ -127,11 +132,6 @@ function ZonePanel({zone, session, focused}: {readonly zone: BoardZone; readonly
       </div>
       <footer className="zone-foot">
         <p className="muted small">{previewNote(preview)}</p>
-        {entry && status && (
-          <p className="small" aria-live="polite">
-            <StatusText status={status} />
-          </p>
-        )}
       </footer>
     </section>
   );

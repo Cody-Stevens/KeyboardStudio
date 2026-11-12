@@ -26,6 +26,8 @@ import {$macroNames, $session, legendContext, physicalKeyName, setMacroName, sto
 import {$layer, pulseKey} from './ui.ts';
 
 export interface LogEntry extends LogEntryBase {
+  /** What the line says when the write did not save ("Caps Lock on Windows was not changed to Tab."). */
+  readonly failText: string;
   /** A colour swatch for lighting lines. */
   readonly swatch?: string;
   /** Reverts the change. Returns the new entry's id, or null if it could not start. */
@@ -144,12 +146,15 @@ export const setKey = (matrix: number, value: number, layers: readonly number[])
     pulseKey(matrix);
     return addEntry({
       text: `Undone: ${keyName} on ${joinNames(layers.map((layer) => live.meta.layers[layer]?.name ?? `Layer ${layer}`))} is ${keycodeName(before[0]?.value ?? 0, ctx)} again.`,
+      failText: `Undo did not save: ${keyName} is still ${keycodeName(value, ctx)}.`,
       rollbackText: `${keyName} stays ${keycodeName(value, ctx)}.`,
       writeIds: undoHandles.map((handle) => handle.id),
     });
   };
+  const layerNames = joinNames(layers.map((layer) => session.meta.layers[layer]?.name ?? `Layer ${layer}`));
   return addEntry({
     text: keySentence(session, matrix, layers, value),
+    failText: `${keyName} on ${layerNames} was not changed to ${keycodeName(value, ctx)}.`,
     rollbackText: `${keyName} is back to ${keycodeName(before[0]?.value ?? 0, ctx)}.`,
     writeIds: handles.map((handle) => handle.id),
     undo,
@@ -208,6 +213,7 @@ export const setLighting = (zoneName: string, control: MenuControl, input: Contr
     const previous = describeMenuValue(control, before);
     return addEntry({
       text: `Undone: ${zoneName} ${label} is ${previous.text} again.`,
+      failText: `Undo did not save for ${zoneName} ${label}.`,
       rollbackText: `${zoneName} ${label} stays as it was.`,
       writeIds: [undoHandle.id],
       ...(previous.swatch ? {swatch: previous.swatch} : {}),
@@ -215,6 +221,7 @@ export const setLighting = (zoneName: string, control: MenuControl, input: Contr
   };
   addEntry({
     text: control.type === 'color' ? `${zoneName} colour changed.` : `${zoneName} ${label} is now ${described.text}.`,
+    failText: `${zoneName} ${label} could not be changed.`,
     rollbackText: `${zoneName} ${label} is back to what the keyboard has.`,
     writeIds: [handle.id],
     mergeKey: `menu:${control.commandId}`,
@@ -254,6 +261,12 @@ export const macroDisplayName = (index: number, names: readonly string[] = $macr
   return given && given.length > 0 ? given : `Macro ${index + 1}`;
 };
 
+/** "Macro Sig" for a named macro, "Macro 2" for an unnamed one. */
+const macroLabel = (index: number): string => {
+  const given = $macroNames.get()[index]?.trim();
+  return given && given.length > 0 ? `Macro ${given}` : `Macro ${index + 1}`;
+};
+
 /**
  * Saves a macro and, if `place` is given, puts it on that key in the same
  * action. Returns an error message when it could not start.
@@ -274,7 +287,7 @@ export const saveMacro = (index: number, name: string, expression: string, place
   const beforeName = $macroNames.get()[index] ?? '';
   const macroValue = session.table.valueOf(`MACRO(${index})`);
   setMacroName(index, name);
-  const displayName = macroDisplayName(index);
+  const label = macroLabel(index);
   let handles: WriteHandle[];
   try {
     handles = [store.setMacro(index, expression)];
@@ -288,8 +301,8 @@ export const saveMacro = (index: number, name: string, expression: string, place
   }
   const layerNames = place ? joinNames(place.layers.map((layer) => session.meta.layers[layer]?.name ?? `Layer ${layer}`)) : '';
   const text = place
-    ? `Macro ${displayName} is saved and on ${physicalKeyName(session, place.matrix)} (${layerNames}).`
-    : `Macro ${displayName} is saved. It is not on a key yet.`;
+    ? `${label} is saved and on ${physicalKeyName(session, place.matrix)} (${layerNames}).`
+    : `${label} is saved. It is not on a key yet.`;
   const undo = (): number | null => {
     const live = requireLive();
     if (!live) {
@@ -298,12 +311,19 @@ export const saveMacro = (index: number, name: string, expression: string, place
     const undoHandles = [store.setMacros(beforeExpressions), ...writeKeys(live, keyBefore)];
     setMacroName(index, beforeName);
     return addEntry({
-      text: `Undone: macro ${displayName} is back to how it was${place ? ' and the key is back too' : ''}.`,
+      text: `Undone: ${label} is back to how it was${place ? ' and the key is back too' : ''}.`,
+      failText: `Undo did not save for ${label}.`,
       rollbackText: 'The macro stays as saved.',
       writeIds: undoHandles.map((handle) => handle.id),
     });
   };
-  addEntry({text, rollbackText: 'The macro and keys are back to what the keyboard has.', writeIds: handles.map((handle) => handle.id), undo});
+  addEntry({
+    text,
+    failText: `${label} could not be saved${place ? ' on the key' : ''}.`,
+    rollbackText: 'The macro and keys are back to what the keyboard has.',
+    writeIds: handles.map((handle) => handle.id),
+    undo,
+  });
   return null;
 };
 
@@ -314,18 +334,19 @@ export const clearMacro = (index: number): void => {
     return;
   }
   const before = session.macros?.expressions[index] ?? '';
-  const name = macroDisplayName(index);
+  const name = macroLabel(index);
   const handle = store.setMacro(index, '');
   addEntry({
-    text: `Macro ${name} is now empty.`,
-    rollbackText: `Macro ${name} is back to what the keyboard has.`,
+    text: `${name} is now empty.`,
+    failText: `${name} could not be emptied.`,
+    rollbackText: `${name} is back to what the keyboard has.`,
     writeIds: [handle.id],
     undo: () => {
       if (!requireLive()) {
         return null;
       }
       const undoHandle = store.setMacro(index, before);
-      return addEntry({text: `Undone: macro ${name} is back.`, rollbackText: 'The macro stays empty.', writeIds: [undoHandle.id]});
+      return addEntry({text: `Undone: ${name} is back.`, failText: `Undo did not save for ${name}.`, rollbackText: 'The macro stays empty.', writeIds: [undoHandle.id]});
     },
   });
 };
@@ -355,6 +376,7 @@ export const restoreSnapshot = async (snapshot: KeyboardSnapshot, label: string)
   if (writeIds.length > 0) {
     addEntry({
       text: `Restored "${label}".`,
+      failText: `"${label}" was not fully restored.`,
       rollbackText: 'Some values are back to what the keyboard had.',
       writeIds,
       undo: () => {
@@ -364,7 +386,12 @@ export const restoreSnapshot = async (snapshot: KeyboardSnapshot, label: string)
         const knownNow = new Set(store.$writes.get().map((record) => record.id));
         void store.restoreSnapshot(before).catch(() => undefined);
         const ids = store.$writes.get().filter((record) => !knownNow.has(record.id)).map((record) => record.id);
-        return addEntry({text: `Undone: the keyboard is back to how it was before "${label}".`, rollbackText: 'Some values stay restored.', writeIds: ids});
+        return addEntry({
+          text: `Undone: the keyboard is back to how it was before "${label}".`,
+          failText: `Undo of "${label}" did not fully save.`,
+          rollbackText: 'Some values stay restored.',
+          writeIds: ids,
+        });
       },
     });
   }
