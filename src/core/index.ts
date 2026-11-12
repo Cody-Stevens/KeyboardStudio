@@ -69,7 +69,24 @@ export {
   type MenuValues,
   type MenuZone,
 } from './definitions/menus.ts';
-export {BUNDLED_DEFINITIONS, findBundledDefinition, type BundledDefinition} from './definitions/bundled/index.ts';
+export {BUNDLED_DEFINITIONS, findBundledDefinition, findBundledMeta, type BundledDefinition} from './definitions/bundled/index.ts';
+export {
+  buildBoardMeta,
+  genericLayers,
+  guessZonePart,
+  keyNoteFor,
+  resolveBoardMeta,
+  type BoardKeyNote,
+  type BoardLayerMeta,
+  type BoardLook,
+  type BoardMeta,
+  type BoardMetaSource,
+  type BoardPart,
+  type BoardZone,
+  type BoardZoneMeta,
+  type CustomKeyName,
+  type LayerOs,
+} from './definitions/board-meta.ts';
 export {
   USEVIA_DEFINITIONS_URL,
   fetchPublicDefinitionIndex,
@@ -90,6 +107,7 @@ export {
   type KeycodeKind,
   type KeycodeTableOptions,
 } from './keycodes/keycode-table.ts';
+export {DANGEROUS_KEYCODES, keycodeDanger, type KeycodeDanger, type KeycodeDangerKind} from './keycodes/danger.ts';
 
 // Macros
 export {
