@@ -62,7 +62,10 @@ function ZonePanel({zone, session, focused}: {readonly zone: BoardZone; readonly
   const values = session.menuValues;
   const preview = zonePreview(zone.zone, values);
   const roles = zoneControls(zone.zone);
-  const visible = zone.zone.controls.filter((control) => isNodeVisible(control, values));
+  // Effect first, then colour, brightness and speed: the order people decide in.
+  const rank = (control: MenuControl) =>
+    control === roles.effect ? 0 : control === roles.color ? 1 : control === roles.brightness ? 2 : control === roles.speed ? 3 : 4;
+  const visible = zone.zone.controls.filter((control) => isNodeVisible(control, values)).sort((a, b) => rank(a) - rank(b));
   const stale = session.stale;
 
   useEffect(() => {
@@ -123,12 +126,11 @@ function ZonePanel({zone, session, focused}: {readonly zone: BoardZone; readonly
         {preview.mode === 'off' && <p className="muted small">Off. Choose an effect to turn it on.</p>}
       </div>
       <footer className="zone-foot">
-        {entry && status ? (
+        <p className="muted small">{previewNote(preview)}</p>
+        {entry && status && (
           <p className="small" aria-live="polite">
             <StatusText status={status} />
           </p>
-        ) : (
-          <p className="muted small">{previewNote(preview)}</p>
         )}
       </footer>
     </section>
@@ -198,9 +200,7 @@ function Control({control, session, isEffect, disabled, onWrite}: ControlProps) 
         <div className="field">
           <span className="field-label">
             {label}
-            <span className="field-swatch" style={{background: hueSatCss(decoded.hue, decoded.sat)}} aria-hidden="true" />
-          </span>
-          <div className="quick-colours" role="group" aria-label={`${label} presets`}>
+            <span className="quick-colours" role="group" aria-label={`${label} presets`}>
             {QUICK_COLOURS.map(([hue, sat]) => (
               <button
                 key={`${hue}-${sat}`}
@@ -212,7 +212,8 @@ function Control({control, session, isEffect, disabled, onWrite}: ControlProps) 
                 onClick={() => onWrite(control, {type: 'color', hue, sat}, false)}
               />
             ))}
-          </div>
+            </span>
+          </span>
           <input
             type="range"
             className="hue"

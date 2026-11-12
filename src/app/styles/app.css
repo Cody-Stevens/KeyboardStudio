@@ -1105,9 +1105,9 @@ input[type='range'] {
 .zone {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 8px;
   min-width: 0;
-  padding: 14px;
+  padding: 12px 14px;
   border-radius: var(--radius);
   background: var(--card);
   box-shadow: var(--shadow);
@@ -1127,15 +1127,21 @@ input[type='range'] {
   font-size: 17px;
 }
 .zone-swatch {
-  width: 28px;
-  height: 28px;
+  width: 24px;
+  height: 24px;
   border-radius: 8px;
   border: 1px solid var(--line);
   flex: none;
 }
 .zone-controls {
   display: grid;
-  gap: 12px;
+  gap: 8px;
+}
+.zone select {
+  min-height: 32px;
+}
+.zone .field {
+  gap: 2px;
 }
 .zone-foot {
   margin-top: auto;
@@ -1170,12 +1176,12 @@ input[type='range'] {
 }
 .quick-colours {
   display: flex;
-  gap: 6px;
+  gap: 5px;
 }
 .swatch {
-  width: 26px;
-  height: 26px;
-  border-radius: 8px;
+  width: 20px;
+  height: 20px;
+  border-radius: 6px;
   border: 1px solid rgb(0 0 0 / 0.15);
   cursor: pointer;
 }
@@ -1185,13 +1191,15 @@ input[type='range'] {
 }
 input.hue {
   appearance: none;
-  height: 12px;
+  height: 10px;
+  margin: 6px 0;
   border-radius: 6px;
   background: linear-gradient(90deg, #f00, #ff0 17%, #0f0 33%, #0ff 50%, #00f 67%, #f0f 83%, #f00);
 }
 input.sat {
   appearance: none;
-  height: 12px;
+  height: 10px;
+  margin: 4px 0;
   border-radius: 6px;
   background: linear-gradient(90deg, #fff, var(--sat-end, #f00));
   border: 1px solid var(--line);

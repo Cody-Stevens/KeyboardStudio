@@ -1,6 +1,6 @@
 import {useStore} from '@nanostores/react';
 import {useEffect, useMemo, useRef, useState} from 'react';
-import {keycodeName} from '../logic/legends.ts';
+import {keycodeName, modifierLabel, type ModName} from '../logic/legends.ts';
 import {appendText, describeStep, expressionFromSteps, recordKeyPress, stepsFromExpression, type MacroStep} from '../logic/macro-steps.ts';
 import {clearMacro, macroBudget, macroDisplayName, saveMacro} from '../state/changes.ts';
 import {$macroNames, legendContext, physicalKeyName, type SessionView} from '../state/session.ts';
@@ -62,7 +62,14 @@ export function MacroEditor({session}: {readonly session: SessionView}) {
   const budget = macroBudget(session, slot, expression);
   const free = budget.size - budget.used;
   const ctx = legendContext(session, 0);
+  const MOD_CODES: Readonly<Record<string, ModName>> = {CTL: 'ctrl', SFT: 'shift', ALT: 'alt', GUI: 'gui'};
   const keyName = (code: string) => {
+    // In a shortcut, "Ctrl + Shift + T" reads better than "Left Ctrl + Left Shift + T".
+    const modifier = /^KC_[LR](CTL|SFT|ALT|GUI)$/.exec(code)?.[1];
+    const mod = modifier ? MOD_CODES[modifier] : undefined;
+    if (mod) {
+      return modifierLabel(mod, 'any');
+    }
     const value = session.table.valueOf(code);
     return value === null ? code : keycodeName(value, ctx);
   };

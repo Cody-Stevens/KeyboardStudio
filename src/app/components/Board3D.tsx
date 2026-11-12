@@ -34,6 +34,9 @@ export const lightsFor = (session: SessionView): SceneLights => {
   return {backlight: preview('backlight'), logo: preview('logo'), side: preview('side')};
 };
 
+/** The assemble animation plays once per page, not again after a reconnect. */
+let introPlayed = false;
+
 /**
  * Hosts the 3D scene. three.js and the scene load as their own chunk when
  * this mounts; the flat board stays usable until it is ready.
@@ -92,7 +95,8 @@ export function Board3D(props: Board3DProps) {
         instance.setFlat(current.flat, false);
         instance.setPaused(!current.visible);
         // Reconnects and later mounts skip the assemble animation.
-        instance.startIntro(current.intro);
+        instance.startIntro(current.intro && !introPlayed);
+        introPlayed = true;
         Object.assign(window, {__keyboardScene: instance});
         current.onReady();
       } catch {

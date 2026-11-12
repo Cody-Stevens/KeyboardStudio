@@ -925,6 +925,9 @@ export class KeyboardScene {
     }
     for (const group of this.groups) {
       group.mesh.instanceMatrix.needsUpdate = true;
+      // Keys moved: let picking recompute the bounds from the current positions.
+      group.mesh.boundingSphere = null;
+      group.mesh.boundingBox = null;
       group.glow.needsUpdate = true;
       group.highlight.needsUpdate = true;
     }
