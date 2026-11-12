@@ -1,0 +1,40 @@
+{
+  "name": "keyboard-studio",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Browser-based configurator for keyboards that speak the VIA protocol.",
+  "license": "GPL-3.0-only",
+  "author": "Cody Stevens",
+  "type": "module",
+  "packageManager": "pnpm@10.12.3",
+  "engines": {
+    "node": ">=22.23.4"
+  },
+  "scripts": {
+    "dev": "astro dev --port 4321",
+    "build": "astro check && astro build",
+    "preview": "astro preview --port 4321",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "astro check"
+  },
+  "dependencies": {
+    "@nanostores/react": "^2.0.1",
+    "@the-via/reader": "1.14.4",
+    "nanostores": "^1.5.5",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1"
+  },
+  "devDependencies": {
+    "@astrojs/check": "^0.9.12",
+    "@astrojs/react": "^7.1.8",
+    "@types/node": "^22.20.5",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@types/w3c-web-hid": "^1.0.7",
+    "astro": "^7.4.11",
+    "fake-indexeddb": "^6.2.8",
+    "typescript": "~6.0.3",
+    "vitest": "^5.1.0"
+  }
+}
