@@ -115,14 +115,18 @@ export class MockTransport implements Transport {
     if (failure === 'timeout') {
       return;
     }
-    let reply = this.keyboard.handle(request);
+    let reply: Uint8Array;
+    if (failure === 'unhandled') {
+      // The firmware rejects the command without applying it.
+      reply = request.slice();
+      reply[0] = 0xff;
+    } else {
+      reply = this.keyboard.handle(request);
+    }
     if (failure === 'drop-after-apply') {
       return;
     }
-    if (failure === 'unhandled') {
-      reply = request.slice();
-      reply[0] = 0xff;
-    } else if (failure === 'corrupt') {
+    if (failure === 'corrupt') {
       reply = new Uint8Array(REPORT_SIZE).fill(0xee);
     }
     const delay = this.nextDelay();

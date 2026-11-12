@@ -556,7 +556,6 @@ export const createKeyboardStore = (options: KeyboardStoreOptions = {}) => {
       return;
     }
     await flushSaves();
-    await queue.whenIdle();
     session = null;
     current.unsubscribe();
     current.channel.close();
@@ -719,17 +718,22 @@ export const createKeyboardStore = (options: KeyboardStoreOptions = {}) => {
     );
   };
 
-  /** Starts any pending debounced saves now. */
+  /**
+   * Starts pending debounced saves now and waits for the queue to drain.
+   * Loops because a queued write can schedule a new save when it finishes.
+   */
   const flushSaves = async () => {
-    const s = session;
-    for (const [channel, timer] of saveTimers) {
-      clearTimeout(timer);
-      saveTimers.delete(channel);
-      if (s) {
-        runSave(s, channel);
+    do {
+      const s = session;
+      for (const [channel, timer] of saveTimers) {
+        clearTimeout(timer);
+        saveTimers.delete(channel);
+        if (s) {
+          runSave(s, channel);
+        }
       }
-    }
-    await queue.whenIdle();
+      await queue.whenIdle();
+    } while (saveTimers.size > 0 || queue.size > 0);
   };
 
   /**
@@ -1019,7 +1023,6 @@ export const createKeyboardStore = (options: KeyboardStoreOptions = {}) => {
   const refresh = async (): Promise<void> => {
     const s = requireSession();
     await flushSaves();
-    await queue.whenIdle();
     const [keymap, macroBytes, menuValues, layoutOptions] = await Promise.all([
       s.api.readKeymap(s.definition.matrix, s.info.layerCount),
       s.info.macroCount > 0 ? s.api.readMacroBuffer() : Promise.resolve([]),
@@ -1033,10 +1036,7 @@ export const createKeyboardStore = (options: KeyboardStoreOptions = {}) => {
   };
 
   /** Resolves when every queued write and pending save has finished. */
-  const whenIdle = async (): Promise<void> => {
-    await flushSaves();
-    await queue.whenIdle();
-  };
+  const whenIdle = (): Promise<void> => flushSaves();
 
   return {
     // State
