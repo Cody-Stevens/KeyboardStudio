@@ -1,9 +1,10 @@
 import {useStore} from '@nanostores/react';
-import {useEffect} from 'react';
+import {useEffect, useState} from 'react';
 import {undoLatest} from '../state/changes.ts';
 import {$session} from '../state/session.ts';
 import {$hint, $logOpen, $mode, $placing, $selected, $typingPreview, showHint, toggleView} from '../state/ui.ts';
 import {Dock} from './Dock.tsx';
+import {SplitHandle} from './SplitHandle.tsx';
 import {Stage} from './Stage.tsx';
 import {TopBar} from './TopBar.tsx';
 import {WriteLog} from './WriteLog.tsx';
@@ -13,6 +14,19 @@ const isTyping = (target: EventTarget | null) =>
 
 /** True while a "press a key" capture or a macro recording owns the keyboard. */
 export const isCapturing = () => document.documentElement.dataset['capturing'] === 'true';
+
+/** Phones stack the board and the editor in one scrolling page, so they have no split. */
+const useNarrowLayout = () => {
+  const query = '(max-width: 760px)';
+  const [narrow, setNarrow] = useState(() => window.matchMedia(query).matches);
+  useEffect(() => {
+    const list = window.matchMedia(query);
+    const onChange = () => setNarrow(list.matches);
+    list.addEventListener('change', onChange);
+    return () => list.removeEventListener('change', onChange);
+  }, []);
+  return narrow;
+};
 
 export function Workspace() {
   const logOpen = useStore($logOpen);
@@ -53,11 +67,14 @@ export function Workspace() {
   }, []);
 
   const session = useStore($session);
+  const [main, setMain] = useState<HTMLElement | null>(null);
+  const narrow = useNarrowLayout();
   return (
     <div className={`workspace${logOpen ? ' log-open' : ''}${session?.stale ? ' stale' : ''}`}>
       <TopBar />
-      <main className="workspace-main" id="main">
+      <main className="workspace-main" id="main" ref={setMain}>
         <Stage />
+        {!narrow && <SplitHandle container={main} />}
         <Dock />
       </main>
       <WriteLog />

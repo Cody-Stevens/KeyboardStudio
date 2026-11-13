@@ -1,6 +1,7 @@
 /** UI state that is not keyboard state: modes, selection, view and panel choices. */
 import {atom} from 'nanostores';
 import type {BoardPart} from '../../core/index.ts';
+import {isBoardShare} from '../logic/split.ts';
 import {env, isBoolean, loadSetting, saveSetting} from './env.ts';
 
 export type Mode = 'keys' | 'lighting' | 'macros' | 'snapshots';
@@ -45,6 +46,20 @@ export const $logOpen = atom<boolean>(loadSetting('log-open', wideDefault, isBoo
 export const setLogOpen = (open: boolean): void => {
   $logOpen.set(open);
   saveSetting('log-open', open);
+};
+
+/** How much of the workspace height the board gets (0-1), or null for the default. Remembered in this browser. */
+export const $boardShare = atom<number | null>(loadSetting('board-share', null, isBoardShare));
+export const setBoardShare = (share: number, persist: boolean): void => {
+  const next = Math.max(0.02, Math.min(0.98, share));
+  $boardShare.set(next);
+  if (persist) {
+    saveSetting('board-share', next);
+  }
+};
+export const resetBoardShare = (): void => {
+  $boardShare.set(null);
+  saveSetting('board-share', null);
 };
 
 /** "Also on Mac": write the paired layer in the same action. */

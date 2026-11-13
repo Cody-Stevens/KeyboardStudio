@@ -41,7 +41,7 @@ export function Dock() {
   }
 
   return (
-    <section className="dock" aria-label="Editor">
+    <section className="dock" id="editor" aria-label="Editor">
       <div className="dock-tabs" role="tablist" aria-label="What to change" onKeyDown={onKeyDown}>
         {MODES.map((entry) => (
           <button

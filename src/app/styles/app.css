@@ -528,7 +528,7 @@ input[type='range'] {
 .stage {
   position: relative;
   flex: 1 1 auto;
-  min-height: 240px;
+  min-height: 0;
   overflow: hidden;
   background: radial-gradient(110% 120% at 50% 40%, #2a3354 0%, var(--desk) 55%, var(--desk-deep) 100%);
   color: var(--desk-ink);
@@ -857,6 +857,50 @@ input[type='range'] {
   stroke: none;
 }
 
+/* --------------------------------------------------------------- split bar */
+
+/* The bar between board and editor: a slim grip that brightens on hover, focus and drag. */
+.split-handle {
+  flex: none;
+  position: relative;
+  display: grid;
+  place-items: center;
+  background: var(--paper);
+  border-top: 1px solid var(--line);
+  cursor: row-resize;
+  touch-action: none;
+  outline: none;
+}
+.split-handle::before {
+  /* A taller invisible target, so the bar is easy to catch. */
+  content: '';
+  position: absolute;
+  inset: -6px 0;
+}
+.split-grip {
+  width: 44px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--line);
+  transition:
+    background-color 120ms ease,
+    width 120ms ease;
+}
+.split-handle:hover .split-grip,
+.split-handle.dragging .split-grip {
+  width: 64px;
+  background: var(--ink-2);
+}
+.split-handle:focus-visible .split-grip {
+  width: 64px;
+  background: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.workspace-main:has(.split-handle.dragging) {
+  cursor: row-resize;
+  user-select: none;
+}
+
 /* --------------------------------------------------------------------- dock */
 
 .dock {
@@ -865,12 +909,11 @@ input[type='range'] {
   flex-direction: column;
   min-height: 0;
   background: var(--paper);
-  border-top: 1px solid var(--line);
 }
 .dock-tabs {
   display: flex;
   gap: 4px;
-  padding: 10px 16px 0;
+  padding: 4px 16px 0;
 }
 .dock-tab {
   min-height: 34px;
@@ -1614,6 +1657,9 @@ select {
     height: 56vw;
     min-height: 220px;
   }
+  .dock {
+    border-top: 1px solid var(--line);
+  }
   .stage-top {
     overflow-x: auto;
   }
@@ -1648,3 +1694,4 @@ select {
     transition-duration: 1ms !important;
   }
 }
+
