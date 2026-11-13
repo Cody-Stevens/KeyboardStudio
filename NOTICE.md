@@ -27,6 +27,22 @@ License: GPL-3.0. Copyright (C) The VIA authors.
 | `src/core/definitions/menus.ts` | `src/components/panes/configure-panes/custom/custom-control.tsx`, `src/utils/range-constraints.ts` | Control value encoding |
 | `src/core/snapshots/via-layout.ts` | `src/components/panes/configure-panes/save-load.tsx` | VIA layout file shape and import rules |
 
+## qmk/qmk_firmware
+
+Repository: <https://github.com/qmk/qmk_firmware>
+Commit: `33292390974c75362ca30873c482d052e0bd7a63` (2026-11-12)
+License: GPL-2.0-or-later, used here under GPL-3.0. Copyright (C) the QMK
+contributors; `flower_blooming_anim.h` Copyright 2023 HorrorTroll.
+
+The lighting previews compute what the keyboard computes, so these formulas
+are ported line by line to TypeScript, with C's integer types emulated.
+
+| KeyboardStudio file | Upstream file | How |
+| --- | --- | --- |
+| `src/app/logic/qmk-math.ts` | `lib/lib8tion/scale8.h` (`scale8`, `scale16by8` with `FASTLED_SCALE8_FIXED=1`), `lib/lib8tion/math8.h` (`qadd8`, `qsub8`, `abs8`, `sqrt16`), `lib/lib8tion/trig8.h` (`sin8_C`, `cos8`, `atan2_8`), `quantum/color.c` (`hsv_to_rgb_impl` without the CIE curve) | Ported |
+| `src/app/logic/rgb-matrix.ts` | `quantum/rgb_matrix/animations/`: `solid_color_anim.h`, `alpha_mods_anim.h`, `gradient_up_down_anim.h`, `gradient_left_right_anim.h`, `breathing_anim.h`, `colorband_*_anim.h` (6), `cycle_*_anim.h` (7), `rainbow_moving_chevron_anim.h`, `dual_beacon_anim.h`, `rainbow_beacon_anim.h`, `rainbow_pinwheels_anim.h`, `flower_blooming_anim.h`, `hue_breathing_anim.h`, `hue_pendulum_anim.h`, `hue_wave_anim.h`, `solid_reactive_anim.h`, `solid_reactive_wide.h`, `solid_reactive_cross.h`, `solid_reactive_nexus.h`, `splash_anim.h`, `solid_splash_anim.h`, and `runners/effect_runner_{i,dx_dy,dx_dy_dist,sin_cos_i,reactive,reactive_splash}.h`; key hit tracking from `quantum/rgb_matrix/rgb_matrix.c` | Ported; one function per effect |
+| `src/app/logic/effect-info.ts` | The same animation files | Plain-language descriptions written from reading them; no code copied |
+
 ## the-via/reader
 
 Repository: <https://github.com/the-via/reader>
@@ -61,7 +77,7 @@ These npm packages are bundled into the site. Their licences allow that.
 | --- | --- | --- |
 | `react`, `react-dom` | MIT | The UI |
 | `nanostores`, `@nanostores/react` | MIT | State |
-| `three` | MIT, Copyright 2010-2026 three.js authors | The 3D keyboard (loaded as its own chunk) |
+| `three` | MIT, Copyright 2010-2026 three.js authors | The 3D keyboard (loaded as its own chunk), including its `examples/jsm` RoomEnvironment, EffectComposer, UnrealBloomPass, OutputPass and CopyShader |
 
 ## Fonts
 

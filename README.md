@@ -40,7 +40,11 @@ hardware and connects on page load. More query options:
 
 `pnpm e2e` needs Playwright's Chromium (`pnpm exec playwright install chromium`
 once). It starts `astro preview` on port 4321 unless one is already running.
-Set `KS_SHOTS=<folder>` to also save a screenshot of every state.
+Set `KS_SHOTS=<folder>` to also save a screenshot of every state, and
+`KS_SHOTS2=<folder>` for the lighting and split screenshots
+(`e2e/lighting-and-split.spec.ts`). `node scripts/measure-frames.mjs` (with
+`pnpm preview` running) prints the 3D frame rate on the GPU and on Chromium's
+software renderer.
 
 Without `?mock=1`, the page uses WebHID, which needs a Chromium-based browser
 (Chrome, Edge) on HTTPS or localhost. Click **Connect** and pick the keyboard.
@@ -57,7 +61,7 @@ Without `?mock=1`, the page uses WebHID, which needs a Chromium-based browser
 
 | Folder | Job |
 | --- | --- |
-| `logic/` | Framework-free and unit-tested: keycap legends and plain key names (Win or Cmd per layer), the key picker catalogue and search, lighting previews (QMK's rgb_matrix formulas), macro steps and recording, snapshot diffs, write-log status. |
+| `logic/` | Framework-free and unit-tested: keycap legends and plain key names (Win or Cmd per layer), the key picker catalogue and search, lighting previews (`rgb-matrix.ts` and `qmk-math.ts` port QMK's rgb_matrix effects and lib8tion maths), plain descriptions and groups for effects (`effect-info.ts`), the board/editor split rules, macro steps and recording, snapshot diffs, write-log status. |
 | `state/` | nanostores atoms: the connect flow, the session view (kept after a disconnect so the page stays readable), UI state, and `changes.ts`, which makes every write, logs it as a sentence and knows how to undo it. |
 | `scene/` | The three.js board. Loaded as its own chunk after the 2D shell. |
 | `components/` | React components. |
@@ -71,6 +75,13 @@ Without `?mock=1`, the page uses WebHID, which needs a Chromium-based browser
 - **Docked editor.** Selecting a key presses it and rings it; the editor sits
   below the board, which stays fully visible. Arrow keys move between keys
   when the board has focus.
+- **Adjustable split.** Drag the bar between the board and the editor (mouse
+  or touch), or focus it and use the arrow keys, Page Up/Down, Home and End,
+  to give either more room. Double-click it, or press Enter, to go back to
+  the default. The choice is remembered in this browser. The board keeps at
+  least 260 px and the editor 200 px; the editor scrolls inside itself. Both
+  boards refit as you drag, one frame per change. Phones stack the two and
+  have no bar.
 - **Sentences and a write log.** "Caps Lock on Windows is now Esc. Saved to
   keyboard. Undo". Status comes from the store's write records (pending,
   saved, failed with rollback), never from a timer. The **Changes** panel
@@ -83,11 +94,31 @@ Without `?mock=1`, the page uses WebHID, which needs a Chromium-based browser
 - **Lighting.** One panel per zone, side by side, generated from the
   definition's menus and `showIf` rules. Hovering a panel brings its zone
   forward on the model; clicking the logo or a side strip on the model focuses
-  its panel. The model animates only effects whose firmware formula is known
-  (off, solid, alphas/mods, gradients, breathing, the three cycles) and
-  otherwise shows colour and brightness and says so. A brightness above the
-  definition's range (the Linky87 reports 255 of 160) is shown as read and
-  never rewritten unless you move the slider.
+  its panel. A brightness above the definition's range (the Linky87 reports
+  255 of 160) is shown as read and never rewritten unless you move the slider.
+  - *What each effect does.* The effect list stays the definition's own, in
+    groups (steady, your colour moving, rainbow, random twinkles, stays lit
+    and flashes when you type, dark until you type), with one plain line on
+    the chosen effect: what it looks like and whether it uses the colour, the
+    speed and key presses. Names the table does not know get an honest
+    fallback. Where the definition hides the colour (`showIf`) but QMK still
+    uses it (raindrops, hue wave, solid reactive wide), the panel says so.
+  - *Solid reactive.* The panel shows the colour pressed keys flash, worked
+    out with the firmware's rule (the hue turned 64 of 255 steps, a quarter
+    turn), and how long it takes to fade back at the current speed.
+  - *The model.* 37 of the 45 rgb_matrix effects are computed per LED with
+    QMK's own integer maths, including solid reactive and the wide, cross,
+    nexus and splash effects: type on your keyboard or click keys on the model
+    to see them. Effects that use random numbers (raindrops, starlight, pixel
+    flow, digital rain) or the LED wiring order (riverflow) show their colour
+    and say so. LED positions are estimated from the key layout.
+  - *Light.* The backlight is painted into a small light map that lights the
+    plate between the caps, the cap skirts and edges, the inner walls of the
+    case and the desk around the board, so neighbouring colours blend the way
+    real light does. The side strips light the case flanks and the desk.
+    Bloom makes the lights glow on GPUs; it is off on software renderers and
+    switches itself off when frames get slow. The flat view shows each key's
+    colour held still, with a note when the effect moves.
 - **Macros.** Name it, record it or add text and pauses, then **Save and put
   on a key** and click the key: one action writes the macro and the key.
   Macros saved on no key are flagged. Bytes left are counted against the
@@ -123,13 +154,13 @@ and a quiet note says why it is best left alone.
 ### Performance
 
 Measured on 2026-11-12 with `astro preview` and headless Chromium 158 at
-1600 x 1000:
+1600 x 1000 (frame rates with `node scripts/measure-frames.mjs`):
 
 | What | Size (gzip) |
 | --- | --- |
-| JavaScript before the 3D board: app 24 KB, React DOM 66 KB, shared core and React 35 KB, other 5 KB | 130 KB |
+| JavaScript before the 3D board: app 27 KB, React DOM 66 KB, shared core and React 35 KB, lighting maths and effect descriptions 5 KB, other 3 KB | 136 KB |
 | Definition parser (`@the-via/reader`), loaded at start, needed to connect | 49 KB |
-| three.js and the scene, loaded as its own chunk | 148 KB |
+| three.js, the scene, the light map and bloom, loaded as its own chunk | 155 KB |
 | CSS | 6 KB |
 | Fonts: 5 Latin woff2 files | 112 KB (already compressed) |
 
@@ -137,15 +168,18 @@ Measured on 2026-11-12 with `astro preview` and headless Chromium 158 at
 | --- | --- |
 | First contentful paint (static landing) | about 0.4 s |
 | Editor usable on the demo keyboard | about 1.3 s |
-| Frames drawn while nothing moves | 0 (renders on demand) |
-| GPU (D3D11), backlight breathing | 60 fps, 31 draw calls |
-| CPU renderer (SwiftShader), backlight breathing | about 19-20 fps |
+| Frames drawn while nothing moves | 0 (renders on demand; reactive effects animate only until a key press fades) |
+| GPU (RTX 5070, D3D11), backlight breathing, with bloom | 60 fps, 27 scene draw calls plus 15 for bloom and output |
+| Bloom's own cost per frame | GPU 0.2 ms (0.45 to 0.66 ms); SwiftShader 58 ms (53 to 111 ms) |
+| CPU renderer (SwiftShader), backlight breathing, bloom off by itself | about 20 fps, 27 draw calls |
 
 Keycaps are instanced (one mesh per cap size) with every legend in one atlas
-texture. If frames stay slower than 18 per second over a second of animation,
-or WebGL is missing, the page switches to the flat board and says why.
-`prefers-reduced-motion` skips the assemble animation and camera moves and
-holds lighting previews still.
+texture. Bloom is off on software renderers, and switches off when the median
+frame takes longer than 1/45 s. If frames then stay slower than 18 per second
+over a second of animation, or WebGL is missing, the page switches to the flat
+board and says why. `prefers-reduced-motion` skips the assemble animation and
+camera moves, holds lighting previews still and does not animate key
+presses.
 
 ## Architecture of the core
 
@@ -258,6 +292,6 @@ is off by default. The Linky87 is not in that set; its definition is bundled.
 
 ## License
 
-GPL-3.0. KeyboardStudio reuses GPL-3.0 code from the VIA project and ships
-three.js (MIT) and the Barlow fonts (SIL Open Font License); see
-[NOTICE.md](NOTICE.md).
+GPL-3.0. KeyboardStudio reuses GPL-3.0 code from the VIA project, ports
+lighting maths from QMK (GPL-2.0-or-later) and ships three.js (MIT) and the
+Barlow fonts (SIL Open Font License); see [NOTICE.md](NOTICE.md).
