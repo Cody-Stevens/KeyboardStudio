@@ -747,10 +747,10 @@ input[type='range'] {
   content: '';
   position: absolute;
   z-index: 0;
-  inset: 6%;
+  inset: 8%;
   border-radius: calc(var(--u) * 0.12);
   background: var(--led, transparent);
-  box-shadow: 0 0 calc(var(--u) * 0.16) calc(var(--u) * 0.06) color-mix(in srgb, var(--led, transparent) 70%, transparent);
+  box-shadow: 0 0 calc(var(--u) * 0.14) calc(var(--u) * 0.035) color-mix(in srgb, var(--led, transparent) 55%, transparent);
 }
 .flat-board.lit .cap-top {
   z-index: 1;
