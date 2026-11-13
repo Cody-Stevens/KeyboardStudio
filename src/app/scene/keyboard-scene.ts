@@ -2,20 +2,33 @@
  * The real-time 3D keyboard. Built from the definition's layout:
  * - one InstancedMesh per keycap size (sides and top as two material groups),
  * - one legend atlas texture for every keycap top,
- * - per-instance glow (backlight) and highlight injected into the standard material,
- * - logo and side strips when the board has those lighting zones.
+ * - a light field (light-field.ts): the backlight painted into two small
+ *   textures that light the plate, the cap skirts and edges, the case and
+ *   the desk, so neighbouring colours blend the way real light does,
+ * - logo and side strips when the board has those lighting zones, which
+ *   also light the case flanks and the desk,
+ * - an optional bloom pass, switched off on software renderers and when
+ *   frames get slow.
  *
  * It renders on demand: a frame is drawn only when something changed or an
- * animation (camera, key press, intro, an animated lighting preview) runs.
+ * animation (camera, key press, intro, an animated lighting preview, a
+ * reactive effect after a key press) runs.
  */
 import * as THREE from 'three';
 import {RoomEnvironment} from 'three/examples/jsm/environments/RoomEnvironment.js';
+import {EffectComposer} from 'three/examples/jsm/postprocessing/EffectComposer.js';
+import {OutputPass} from 'three/examples/jsm/postprocessing/OutputPass.js';
+import {FullScreenQuad, Pass} from 'three/examples/jsm/postprocessing/Pass.js';
+import {CopyShader} from 'three/examples/jsm/shaders/CopyShader.js';
+import {UnrealBloomPass} from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import type {BoardPart} from '../../core/index.ts';
 import type {BoardKey, BoardModel} from '../logic/board-model.ts';
-import {backlightColor, stripColor, type ZonePreview} from '../logic/lighting.ts';
+import {backlightColor, stillPreview, stripColor, type ZonePreview} from '../logic/lighting.ts';
+import {LED_HITS_TO_REMEMBER, hitsStillShowing, ledPoints, type KeyHit, type LedPoint} from '../logic/rgb-matrix.ts';
+import {LIGHT_FIELD_GLSL, LightField} from './light-field.ts';
 import {CAP_COLORS, LEGEND_FONT, drawLegend, type LegendArt} from './legend-art.ts';
 
-const BG = '#161b2e';
+const BG = '#151a2b';
 const CAP_H = 0.4;
 const CAP_Y = 0.14;
 const CASE_TOP = 0.32;
@@ -24,6 +37,26 @@ const TILT = 0.065;
 const PPU = 220;
 const ATLAS_W = 2048;
 const CELL_PAD = 6;
+/** Room around the board on the canvas for the stage's own controls, in CSS pixels. */
+const INSET_TOP = 58;
+const INSET_BOTTOM = 40;
+
+/** How strongly each surface returns the backlight. Tuned by eye against photos of backlit boards. */
+const LIGHT = {
+  /** Plate between the caps: the brightest, it sits right on the LEDs. */
+  plate: 2.2,
+  /** Cap skirts near the plate, fading up the cap wall. */
+  skirt: 0.95,
+  /** Cap top edges, light scattered through the cap wall. */
+  rim: 0.22,
+  /** Case lip and walls next to the keys. */
+  caseNear: 0.7,
+  caseFar: 0.1,
+  /** Light spilling onto the desk around the board. */
+  desk: 0.42,
+  /** Side strips on the case flanks and the desk. */
+  strip: 1.5,
+} as const;
 
 export interface SceneHooks {
   readonly onKeyClick: (matrix: number) => void;
@@ -39,6 +72,8 @@ export interface SceneOptions {
   readonly parts: {readonly logo: boolean; readonly side: boolean};
   readonly logoText?: string;
   readonly reducedMotion: boolean;
+  /** Bloom on the lights. Defaults to on, except on software renderers. */
+  readonly bloom?: boolean;
   readonly hooks: SceneHooks;
 }
 
@@ -57,7 +92,6 @@ interface CapGeometry {
 interface CapGroup {
   readonly mesh: THREE.InstancedMesh;
   readonly keys: BoardKey[];
-  readonly glow: THREE.InstancedBufferAttribute;
   readonly highlight: THREE.InstancedBufferAttribute;
   readonly rect: THREE.InstancedBufferAttribute;
 }
@@ -85,6 +119,17 @@ interface View {
   tz: number;
 }
 
+/** A key press for the reactive effects: which LED, and when (performance.now ms). */
+interface Hit {
+  readonly led: LedPoint;
+  readonly at: number;
+}
+
+/** Uniforms every lit surface shares: the light field and the side strips. */
+interface SharedUniforms {
+  readonly [name: string]: THREE.IUniform;
+}
+
 const ease = (t: number) => 1 - (1 - t) ** 3;
 const easeBack = (t: number) => {
   const c1 = 1.5;
@@ -98,6 +143,14 @@ const smooth = (a: number, b: number, x: number) => {
 const damp = (current: number, goal: number, k: number, dt: number) => current + (goal - current) * (1 - Math.exp(-k * dt));
 const clamp = (x: number, a: number, b: number) => Math.max(a, Math.min(b, x));
 
+/** True for CPU renderers (SwiftShader, llvmpipe, Microsoft Basic Render Driver). */
+const isSoftwareRenderer = (renderer: THREE.WebGLRenderer): boolean => {
+  const gl = renderer.getContext();
+  const info = gl.getExtension('WEBGL_debug_renderer_info');
+  const name = info ? String(gl.getParameter(info.UNMASKED_RENDERER_WEBGL)) : '';
+  return /swiftshader|llvmpipe|software|basic render/i.test(name);
+};
+
 export class KeyboardScene {
   private readonly renderer: THREE.WebGLRenderer;
   private readonly scene = new THREE.Scene();
@@ -108,7 +161,6 @@ export class KeyboardScene {
   private readonly keyStates: KeyState[] = [];
   private readonly stateByMatrix = new Map<number, KeyState>();
   private readonly groups: CapGroup[] = [];
-  private readonly glowMesh: THREE.InstancedMesh;
   private readonly atlas: HTMLCanvasElement;
   private readonly atlasTexture: THREE.CanvasTexture;
   private readonly materials: THREE.Material[] = [];
@@ -116,10 +168,17 @@ export class KeyboardScene {
   private readonly textures: THREE.Texture[] = [];
   private readonly width: number;
   private readonly height: number;
+  private readonly field: LightField;
+  private readonly leds: LedPoint[];
+  private readonly keyColours: Float32Array;
+  private readonly shared: SharedUniforms;
+  private readonly composer: EffectComposer;
+  private readonly bloomPass: UnrealBloomPass;
+  private bloomOn: boolean;
+  private bloomReason: string | null = null;
   private caseBox = {x0: 0, x1: 0, z0: 0, z1: 0};
   private logo: {lit: THREE.Mesh; halo: THREE.Mesh; hit: THREE.Mesh; material: THREE.MeshBasicMaterial; haloMaterial: THREE.MeshBasicMaterial} | null = null;
-  private side: {strips: THREE.Mesh[]; material: THREE.MeshBasicMaterial; haloMaterial: THREE.MeshBasicMaterial} | null = null;
-  private spill: THREE.MeshBasicMaterial | null = null;
+  private side: {strips: THREE.Mesh[]; material: THREE.MeshBasicMaterial; haloMaterial: THREE.MeshBasicMaterial; length: number} | null = null;
   private shadow: THREE.Mesh | null = null;
   private lights: SceneLights = {backlight: null, logo: null, side: null};
   private partGain: Record<BoardPart, number> = {backlight: 1, logo: 1, side: 1};
@@ -133,6 +192,7 @@ export class KeyboardScene {
   private focused: number | null = null;
   private hover: number | null = null;
   private hoverPart: BoardPart | null = null;
+  private hits: Hit[] = [];
   private clock = 0;
   private lastFrame = 0;
   private raf = 0;
@@ -147,11 +207,12 @@ export class KeyboardScene {
   private readonly ringMaterial = this.track(new THREE.MeshBasicMaterial({color: '#fbfaf6', transparent: true, toneMapped: false, depthWrite: false}));
   private readonly hooks: SceneHooks;
   private readonly reducedMotion: boolean;
-  private readonly modByIndex: boolean[];
   private viewportW = 1;
   private viewportH = 1;
   /** Last measured frame rate while animating. */
   fps = 0;
+  /** Frames drawn since the scene started; tests read it to check nothing draws while idle. */
+  framesDrawn = 0;
 
   constructor(
     private readonly canvas: HTMLCanvasElement,
@@ -162,14 +223,27 @@ export class KeyboardScene {
     this.reducedMotion = options.reducedMotion;
     this.width = model.width;
     this.height = model.height;
-    this.modByIndex = model.keys.map((key) => key.tone !== 'alpha');
+    this.leds = ledPoints(model.keys.map((key) => ({cx: key.cx, cy: key.cy, isMod: key.tone !== 'alpha'})));
+    this.keyColours = new Float32Array(model.keys.length * 3);
 
     const renderer = new THREE.WebGLRenderer({canvas, antialias: true, powerPreference: 'high-performance', alpha: false});
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 0.92;
+    renderer.toneMappingExposure = 1.0;
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer = renderer;
+
+    // Bloom: a half-resolution pass that only picks up light sources (see brightPass below).
+    this.composer = new EffectComposer(renderer);
+    this.composer.addPass(new MultisampledRenderPass(this.scene, this.camera));
+    this.bloomPass = new UnrealBloomPass(new THREE.Vector2(256, 256), 0.42, 0.4, 1.0);
+    pickBrightestChannel(this.bloomPass);
+    this.composer.addPass(this.bloomPass);
+    this.composer.addPass(new OutputPass());
+    this.bloomOn = options.bloom ?? !isSoftwareRenderer(renderer);
+    if (!this.bloomOn) {
+      this.bloomReason = options.bloom === false ? 'off' : 'software renderer';
+    }
 
     this.scene.background = new THREE.Color(BG);
     this.scene.fog = new THREE.Fog(BG, 34, 80);
@@ -178,27 +252,40 @@ export class KeyboardScene {
     pmrem.dispose();
     this.textures.push(environment);
     this.scene.environment = environment;
-    this.scene.environmentIntensity = 0.45;
-
-    this.scene.add(new THREE.HemisphereLight('#dfe6ff', '#30283a', 0.75));
-    const key = new THREE.DirectionalLight('#fff6ea', 1.55);
+    // A desk at night under one lamp: enough light to read every legend, dim enough for the LEDs to carry.
+    this.scene.environmentIntensity = 0.32;
+    this.scene.add(new THREE.HemisphereLight('#d5ddff', '#2a2433', 0.5));
+    const key = new THREE.DirectionalLight('#fff1e0', 1.35);
     key.position.set(-7, 18, 5);
     this.scene.add(key);
-    const rim = new THREE.DirectionalLight('#9fb4ff', 0.7);
+    const rim = new THREE.DirectionalLight('#9fb4ff', 0.5);
     rim.position.set(10, 6, -12);
     this.scene.add(rim);
 
     this.board.rotation.x = TILT;
     this.scene.add(this.board);
 
+    this.field = new LightField(
+      model.keys.map((k) => ({x: k.cx - this.width / 2, z: k.cy - this.height / 2, w: k.w - 0.02, d: k.h - 0.02})),
+      this.width,
+      this.height,
+    );
+    this.shared = {
+      ...this.field.uniforms,
+      uStripColor: {value: new THREE.Color(0, 0, 0)},
+      uStripL0: {value: new THREE.Vector3()},
+      uStripL1: {value: new THREE.Vector3()},
+      uStripR0: {value: new THREE.Vector3()},
+      uStripR1: {value: new THREE.Vector3()},
+    };
+
     const soft = this.softTexture();
-    this.buildDesk(soft);
     this.buildCase();
+    this.buildDesk(soft);
     const {atlas, texture, cells} = this.buildAtlas();
     this.atlas = atlas;
     this.atlasTexture = texture;
     this.buildCaps(cells);
-    this.glowMesh = this.buildGlow(soft);
     if (options.parts.side) {
       this.buildSide(soft);
     }
@@ -280,6 +367,21 @@ export class KeyboardScene {
     }
   }
 
+  /**
+   * A key press for the reactive backlight effects, as the keyboard records
+   * one (rgb_matrix_handle_key_event). With reduced motion, presses are
+   * not shown.
+   */
+  keyHit(matrix: number): void {
+    const state = this.stateByMatrix.get(matrix);
+    const led = state ? this.leds[state.key.index] : undefined;
+    if (!led || this.reducedMotion) {
+      return;
+    }
+    this.hits = [...this.hits, {led, at: performance.now()}].slice(-LED_HITS_TO_REMEMBER);
+    this.invalidate();
+  }
+
   setLights(lights: SceneLights): void {
     this.lights = lights;
     this.invalidate();
@@ -313,12 +415,21 @@ export class KeyboardScene {
     this.invalidate();
   }
 
+  /**
+   * Fits the board to a new canvas size and draws at once, so a dragged
+   * split never shows an empty frame.
+   */
   resize(width: number, height: number): void {
     this.viewportW = Math.max(1, width);
     this.viewportH = Math.max(1, height);
     this.renderer.setSize(this.viewportW, this.viewportH, false);
+    this.composer.setPixelRatio(this.renderer.getPixelRatio());
+    this.composer.setSize(this.viewportW, this.viewportH);
     this.camera.aspect = this.viewportW / this.viewportH;
     this.camera.fov = this.camera.aspect < 1.2 ? 38 : 30;
+    // Keep the board between the stage's top controls and its bottom notes.
+    const shift = Math.min(INSET_TOP - INSET_BOTTOM, this.viewportH * 0.05) / 2;
+    this.camera.setViewOffset(this.viewportW, this.viewportH, 0, -shift, this.viewportW, this.viewportH);
     this.camera.updateProjectionMatrix();
     this.home = this.homeView();
     this.goal = this.flat ? this.flatView() : {...this.home, theta: this.goal.theta, phi: this.goal.phi};
@@ -332,6 +443,10 @@ export class KeyboardScene {
     if (fog instanceof THREE.Fog) {
       fog.near = this.home.r + 8;
       fog.far = this.home.r + 55;
+    }
+    if (!this.paused && !this.disposed && this.introStart !== null) {
+      this.update(0, performance.now());
+      this.draw();
     }
     this.invalidate();
   }
@@ -380,6 +495,16 @@ export class KeyboardScene {
     return this.renderer.info.render.calls;
   }
 
+  /** True while bloom is drawn. */
+  get bloomActive(): boolean {
+    return this.bloomOn;
+  }
+
+  /** Why bloom is off, if it is: "software renderer", "slow frames" or "off". */
+  get bloomOffReason(): string | null {
+    return this.bloomReason;
+  }
+
   dispose(): void {
     this.disposed = true;
     cancelAnimationFrame(this.raf);
@@ -391,7 +516,10 @@ export class KeyboardScene {
     this.geometries.forEach((geometry) => geometry.dispose());
     this.materials.forEach((material) => material.dispose());
     this.textures.forEach((texture) => texture.dispose());
+    this.field.dispose();
     this.atlasTexture.dispose();
+    this.bloomPass.dispose();
+    this.composer.dispose();
     this.renderer.dispose();
   }
 
@@ -432,7 +560,13 @@ export class KeyboardScene {
   }
 
   private buildDesk(soft: THREE.Texture): void {
-    const desk = this.plane(240, 240, this.track(new THREE.MeshStandardMaterial({color: '#232a40', roughness: 0.92, metalness: 0})));
+    const material = this.track(new THREE.MeshStandardMaterial({color: '#2d3346', roughness: 0.9, metalness: 0}));
+    // Light from the board falls on the desk: the backlight escaping around the case, and pools under the side strips.
+    lightSurface(material, this.shared, 'desk', `
+vec3 boardGlow = farLight(vLitBoard.xz) * ${LIGHT.desk.toFixed(3)} * (diffuseColor.rgb * 2.4 + 0.05);
+vec3 strips = stripLight(vLitWorld) * ${LIGHT.strip.toFixed(3)} * (diffuseColor.rgb * 3.0 + 0.16);
+totalEmissiveRadiance += boardGlow + strips;`);
+    const desk = this.plane(240, 240, material);
     desk.position.y = DESK_Y;
     this.scene.add(desk);
     const shadow = this.plane(
@@ -443,12 +577,6 @@ export class KeyboardScene {
     shadow.position.set(0, DESK_Y + 0.006, 0.2);
     this.scene.add(shadow);
     this.shadow = shadow;
-    this.spill = this.track(
-      new THREE.MeshBasicMaterial({map: soft, color: '#000', transparent: true, depthWrite: false, blending: THREE.AdditiveBlending}),
-    );
-    const spill = this.plane(this.width + 10, this.height + 9, this.spill);
-    spill.position.set(0, DESK_Y + 0.008, 0.6);
-    this.scene.add(spill);
   }
 
   private buildCase(): void {
@@ -468,11 +596,21 @@ export class KeyboardScene {
     );
     geometry.rotateX(-Math.PI / 2);
     geometry.translate(0, CASE_TOP - (depth + bevel), 0);
-    const caseMesh = new THREE.Mesh(geometry, this.track(new THREE.MeshStandardMaterial({color: '#2c3140', roughness: 0.38, metalness: 0.6})));
-    this.board.add(caseMesh);
+    const caseMaterial = this.track(new THREE.MeshStandardMaterial({color: '#2c3140', roughness: 0.38, metalness: 0.6}));
+    // The inner walls and the lip catch the backlight (the outer walls face away from it); the flanks catch the side strips.
+    lightSurface(caseMaterial, this.shared, 'case', `
+vec2 toCentre = normalize(-vLitBoard.xz + 1e-4);
+float inward = max(dot(normalize(vLitNormal.xz + 1e-4), toCentre), 0.0) * (1.0 - abs(vLitNormal.y));
+float up = max(vLitNormal.y, 0.0);
+vec3 fromKeys = nearLight(vLitBoard.xz) * ${LIGHT.caseNear.toFixed(3)} * (inward + 0.5 * up) + farLight(vLitBoard.xz) * ${LIGHT.caseFar.toFixed(3)} * up;
+totalEmissiveRadiance += fromKeys * (diffuseColor.rgb * 3.0 + 0.04) + stripLight(vLitWorld) * ${(LIGHT.strip * 0.18).toFixed(3)} * (1.0 - up);`);
+    this.board.add(new THREE.Mesh(geometry, caseMaterial));
+    // The plate sits on the LEDs: around and between the caps it glows the most.
     const plateGeometry = this.track(new THREE.BoxGeometry(W + 0.1, 0.04, H + 0.1));
-    const plate = new THREE.Mesh(plateGeometry, this.track(new THREE.MeshStandardMaterial({color: '#12141b', roughness: 0.55, metalness: 0.2})));
-    this.board.add(plate);
+    const plateMaterial = this.track(new THREE.MeshStandardMaterial({color: '#3a3f4c', roughness: 0.45, metalness: 0.55}));
+    lightSurface(plateMaterial, this.shared, 'plate', `
+totalEmissiveRadiance += nearLight(vLitBoard.xz) * ${LIGHT.plate.toFixed(3)};`);
+    this.board.add(new THREE.Mesh(plateGeometry, plateMaterial));
   }
 
   private buildAtlas(): {atlas: HTMLCanvasElement; texture: THREE.CanvasTexture; cells: {x: number; y: number; w: number; h: number}[]} {
@@ -511,8 +649,8 @@ export class KeyboardScene {
     }
     const sideMaterial = this.track(new THREE.MeshStandardMaterial({color: '#ffffff', roughness: 0.8, metalness: 0}));
     const topMaterial = this.track(new THREE.MeshStandardMaterial({map: this.atlasTexture, roughness: 0.6, metalness: 0}));
-    injectCapShader(sideMaterial, false);
-    injectCapShader(topMaterial, true);
+    injectCapShader(sideMaterial, this.shared, false);
+    injectCapShader(topMaterial, this.shared, true);
     const matrix = new THREE.Matrix4();
     for (const keys of bySize.values()) {
       const first = keys[0];
@@ -522,14 +660,12 @@ export class KeyboardScene {
       const cap = capGeometry(first.w, first.h);
       this.track(cap.geometry);
       const tone = new Float32Array(keys.length * 3);
-      const glow = new THREE.InstancedBufferAttribute(new Float32Array(keys.length * 3), 3);
       const highlight = new THREE.InstancedBufferAttribute(new Float32Array(keys.length), 1);
       const rect = new THREE.InstancedBufferAttribute(new Float32Array(keys.length * 4), 4);
-      glow.setUsage(THREE.DynamicDrawUsage);
       highlight.setUsage(THREE.DynamicDrawUsage);
       const mesh = new THREE.InstancedMesh(cap.geometry, [sideMaterial, topMaterial], keys.length);
       mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-      const group: CapGroup = {mesh, keys, glow, highlight, rect};
+      const group: CapGroup = {mesh, keys, highlight, rect};
       keys.forEach((key, slot) => {
         const color = new THREE.Color(CAP_COLORS[key.tone].body).convertSRGBToLinear();
         tone.set([color.r, color.g, color.b], slot * 3);
@@ -543,7 +679,6 @@ export class KeyboardScene {
       });
       cap.geometry.setAttribute('aTone', new THREE.InstancedBufferAttribute(tone, 3));
       // Each size has its own geometry, so per-instance attributes can live on it.
-      cap.geometry.setAttribute('aGlow', glow);
       cap.geometry.setAttribute('aHighlight', highlight);
       cap.geometry.setAttribute('aRect', rect);
       // Keys move during the intro and presses; skip culling instead of recomputing bounds.
@@ -553,28 +688,8 @@ export class KeyboardScene {
     }
   }
 
-  private buildGlow(soft: THREE.Texture): THREE.InstancedMesh {
-    const geometry = this.track(new THREE.PlaneGeometry(1, 1));
-    geometry.rotateX(-Math.PI / 2);
-    const material = this.track(
-      new THREE.MeshBasicMaterial({map: soft, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false}),
-    );
-    const mesh = new THREE.InstancedMesh(geometry, material, this.model.keys.length);
-    mesh.frustumCulled = false;
-    const matrix = new THREE.Matrix4();
-    const black = new THREE.Color(0, 0, 0);
-    this.model.keys.forEach((key, idx) => {
-      matrix.makeScale(key.w + 0.9, 1, key.h + 0.9);
-      matrix.setPosition(key.cx - this.width / 2, 0.03, key.cy - this.height / 2);
-      mesh.setMatrixAt(idx, matrix);
-      mesh.setColorAt(idx, black);
-    });
-    this.board.add(mesh);
-    return mesh;
-  }
-
   private buildSide(soft: THREE.Texture): void {
-    const material = this.track(new THREE.MeshBasicMaterial({color: '#000', toneMapped: false}));
+    const material = this.track(new THREE.MeshBasicMaterial({color: '#000', toneMapped: true}));
     const haloMaterial = this.track(
       new THREE.MeshBasicMaterial({map: soft, color: '#000', transparent: true, depthWrite: false, blending: THREE.AdditiveBlending}),
     );
@@ -588,16 +703,14 @@ export class KeyboardScene {
       strip.userData['part'] = 'side';
       this.board.add(strip);
       strips.push(strip);
-      const haloGeometry = this.track(new THREE.PlaneGeometry(length + 2.6, 1.8));
+      // A thin bright core on the flank, read as light rather than paint.
+      const haloGeometry = this.track(new THREE.PlaneGeometry(length + 1.4, 0.9));
       const halo = new THREE.Mesh(haloGeometry, haloMaterial);
       halo.rotation.y = (sideSign * Math.PI) / 2;
-      halo.position.set(x + sideSign * 0.02, -0.42, strip.position.z);
+      halo.position.set(x + sideSign * 0.035, -0.42, strip.position.z);
       this.board.add(halo);
-      const pool = this.plane(3.2, length + 3, haloMaterial);
-      pool.position.set(x + sideSign * 1.2, DESK_Y + 0.01, strip.position.z);
-      this.scene.add(pool);
     }
-    this.side = {strips, material, haloMaterial};
+    this.side = {strips, material, haloMaterial, length};
   }
 
   private buildLogo(soft: THREE.Texture, text: string): void {
@@ -617,21 +730,19 @@ export class KeyboardScene {
     const position = new THREE.Vector3(this.width / 2 - 1.55, CASE_TOP + 0.004, -this.height / 2 - 0.52);
     const etched = this.plane(1.9, 0.475, this.track(new THREE.MeshBasicMaterial({map: texture, transparent: true, color: '#454b5c', depthWrite: false})));
     etched.position.copy(position);
-    const material = this.track(
-      new THREE.MeshBasicMaterial({map: texture, transparent: true, color: '#000', depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false}),
-    );
+    const material = this.track(new THREE.MeshBasicMaterial({map: texture, transparent: true, color: '#000', depthWrite: false, blending: THREE.AdditiveBlending}));
     const lit = this.plane(1.9, 0.475, material);
     lit.position.copy(position).add(new THREE.Vector3(0, 0.002, 0));
     const haloMaterial = this.track(
       new THREE.MeshBasicMaterial({map: soft, transparent: true, color: '#000', depthWrite: false, blending: THREE.AdditiveBlending}),
     );
-    const halo = this.plane(3.8, 1.7, haloMaterial);
+    const halo = this.plane(3.4, 1.4, haloMaterial);
     halo.position.copy(position).add(new THREE.Vector3(0, 0.001, 0));
     const hitGeometry = this.track(new THREE.BoxGeometry(2.4, 0.3, 0.9));
     const hit = new THREE.Mesh(hitGeometry, this.track(new THREE.MeshBasicMaterial({visible: false})));
     hit.position.copy(position);
     hit.userData['part'] = 'logo';
-    for (const mesh of [etched, lit, halo, hit]) {
+    for (const mesh of [etched, halo, lit, hit]) {
       this.board.add(mesh);
     }
     this.logo = {lit, halo, hit, material, haloMaterial};
@@ -651,15 +762,18 @@ export class KeyboardScene {
   // Camera
   // -------------------------------------------------------------------------
 
+  /** Camera distance that fits a span, inside the area the stage's controls leave free. */
   private fitDistance(spanW: number, spanH: number): number {
+    const usable = Math.max(0.4, (this.viewportH - INSET_TOP - INSET_BOTTOM) / this.viewportH);
     const vfov = (this.camera.fov * Math.PI) / 180;
-    const hfov = 2 * Math.atan(Math.tan(vfov / 2) * this.camera.aspect);
-    return Math.max(spanW / 2 / Math.tan(hfov / 2), spanH / 2 / Math.tan(vfov / 2));
+    const tanV = Math.tan(vfov / 2) * usable;
+    const tanH = Math.tan(vfov / 2) * this.camera.aspect;
+    return Math.max(spanW / 2 / tanH, spanH / 2 / tanV);
   }
 
   private homeView(): View {
     // The tilted, slightly turned board needs more room than its footprint.
-    const r = this.fitDistance(this.width + 4.5, (this.height + 4) * 0.82) * 1.06;
+    const r = this.fitDistance(this.width + 4.5, (this.height + 4) * 0.82) * 1.02;
     return {theta: -0.1, phi: 0.74, r: Math.max(14, r), ty: -0.4, tz: 0.45};
   }
 
@@ -782,12 +896,8 @@ export class KeyboardScene {
     const dt = this.lastFrame === 0 ? 1 / 60 : Math.min(0.1, (now - this.lastFrame) / 1000);
     this.lastFrame = now;
     this.clock += dt;
-    const active = this.update(dt, now);
-    if (this.atlasDirty) {
-      this.atlasTexture.needsUpdate = true;
-      this.atlasDirty = false;
-    }
-    this.renderer.render(this.scene, this.camera);
+    const active = this.update(dt, performance.now());
+    this.draw();
     if (active) {
       this.measure(dt);
       this.raf = requestAnimationFrame(this.frame);
@@ -796,6 +906,22 @@ export class KeyboardScene {
       this.frameTimes = [];
     }
   };
+
+  private draw(): void {
+    if (this.atlasDirty) {
+      this.atlasTexture.needsUpdate = true;
+      this.atlasDirty = false;
+    }
+    // Count every pass of the frame, not just the last one.
+    this.renderer.info.autoReset = false;
+    this.renderer.info.reset();
+    if (this.bloomOn) {
+      this.composer.render();
+    } else {
+      this.renderer.render(this.scene, this.camera);
+    }
+    this.framesDrawn += 1;
+  }
 
   /** Watches frame times while animating; checks each second of continuous animation. */
   private measure(dt: number): void {
@@ -809,14 +935,21 @@ export class KeyboardScene {
   }
 
   /**
-   * Reports once (onSlow) when the median frame takes longer than 1/18 s,
-   * so the page can switch to the flat board. Public so tests can feed it
-   * frame times from a slow machine.
+   * Bloom goes first: if the median frame takes longer than 1/45 s with
+   * bloom on, bloom is switched off. Without bloom, a median frame longer
+   * than 1/18 s reports once (onSlow), so the page can switch to the flat
+   * board. Public so tests can feed it frame times from a slow machine.
    */
   checkFrameTimes(samples: readonly number[]): void {
     const sorted = [...samples].sort((a, b) => a - b);
     const median = sorted[Math.floor(sorted.length / 2)] ?? 1 / 60;
     this.fps = Math.round(1 / median);
+    if (this.bloomOn && median > 1 / 45) {
+      this.bloomOn = false;
+      this.bloomReason = 'slow frames';
+      this.invalidate();
+      return;
+    }
     if (median > 1 / 18 && !this.slowReported) {
       this.slowReported = true;
       this.hooks.onSlow(this.fps);
@@ -866,7 +999,7 @@ export class KeyboardScene {
     this.camera.up.set(0, v.phi < 0.01 ? 0 : 1, v.phi < 0.01 ? -1 : 0);
     this.camera.lookAt(0, v.ty, v.tz);
     // In the flat view, lie the board down so the top of the caps faces the camera.
-    this.board.rotation.x = damp(this.board.rotation.x, this.flat ? 0 : TILT, k, dt);
+    this.board.rotation.x = dt === 0 ? this.board.rotation.x : damp(this.board.rotation.x, this.flat ? 0 : TILT, k, dt);
 
     // Case rises, then keys drop left to right.
     const caseP = this.introStart === null ? 0 : ease(smooth(0, 0.5, intro));
@@ -885,20 +1018,18 @@ export class KeyboardScene {
       this.partGain[name] = Math.abs(next - this.partGoal[name]) > 0.002 ? next : this.partGoal[name];
     }
 
-    // Keys.
-    const matrix = new THREE.Matrix4();
-    const color = new THREE.Color();
-    // With reduced motion, animated previews hold a still: breathing at full, cycles where they start.
+    // Backlight: the firmware's own formula per LED, with remembered key presses for reactive effects.
     const lit = this.lights.backlight;
-    const back = lit && this.reducedMotion && lit.animated ? {...lit, mode: lit.mode === 'breathing' ? ('solid' as const) : lit.mode, animated: false} : lit;
-    const timeMs = this.reducedMotion ? 0 : nowMs;
-    if (back?.animated) {
+    const back = lit && this.reducedMotion ? stillPreview(lit) : lit;
+    const timer = this.reducedMotion ? 0 : nowMs;
+    this.hits = this.hits.filter((hit) => nowMs - hit.at < 65_535);
+    const hits: KeyHit[] = this.hits.map((hit) => ({x: hit.led.x, y: hit.led.y, index: hit.led.index, tick: Math.max(0, Math.round(nowMs - hit.at))}));
+    if (back?.animated || (back?.reactive && hitsStillShowing(back.effect, back.speed, hits))) {
       active = true;
     }
     const lightsWake = this.introStart === null ? 0 : smooth(0.9, 1.6, intro);
-    let sumR = 0;
-    let sumG = 0;
-    let sumB = 0;
+    const backGain = lightsWake * this.partGain.backlight;
+    const matrix = new THREE.Matrix4();
     for (const state of this.keyStates) {
       const key = state.key;
       if (state.swapAt !== null && state.pendingArt) {
@@ -921,13 +1052,13 @@ export class KeyboardScene {
       const isSelected = this.selected === key.matrix;
       const pressGoal = t < state.tapUntil ? 1 : isSelected ? 0.45 : 0;
       const pressNext = damp(state.press, pressGoal, pressGoal > state.press ? 45 : 18, dt);
-      state.press = Math.abs(pressNext - pressGoal) < 0.002 ? pressGoal : pressNext;
+      state.press = dt === 0 ? state.press : Math.abs(pressNext - pressGoal) < 0.002 ? pressGoal : pressNext;
       if (state.press !== pressGoal || t < state.tapUntil) {
         active = true;
       }
       const liftGoal = (this.hover === key.matrix || this.focused === key.matrix) && !isSelected ? 1 : 0;
       const liftNext = damp(state.lift, liftGoal, 16, dt);
-      state.lift = Math.abs(liftNext - liftGoal) < 0.002 ? liftGoal : liftNext;
+      state.lift = dt === 0 ? state.lift : Math.abs(liftNext - liftGoal) < 0.002 ? liftGoal : liftNext;
       if (state.lift !== liftGoal) {
         active = true;
       }
@@ -939,45 +1070,61 @@ export class KeyboardScene {
       const highlight = isSelected ? 0.35 : this.focused === key.matrix ? 0.7 : this.hover === key.matrix ? 0.25 : 0;
       state.group.highlight.setX(state.slot, highlight);
 
-      const rgb = back ? backlightColor(back, {nx: key.nx, ny: key.ny, isMod: this.modByIndex[key.index] ?? false}, timeMs) : [0, 0, 0];
-      const gain = lightsWake * this.partGain.backlight;
-      const r = rgb[0] * gain;
-      const g = rgb[1] * gain;
-      const b = rgb[2] * gain;
-      sumR += r;
-      sumG += g;
-      sumB += b;
-      color.setRGB(r * 1.4, g * 1.4, b * 1.4);
-      this.glowMesh.setColorAt(key.index, color);
-      state.group.glow.setXYZ(state.slot, r * 0.55, g * 0.55, b * 0.55);
+      const led = this.leds[key.index];
+      const rgb = back && led ? backlightColor(back, led, {timer, hits}) : [0, 0, 0];
+      // Keys still dropping in are not lit yet.
+      const keyGain = backGain * smooth(0.5, 1, dropP);
+      this.keyColours[key.index * 3] = (rgb[0] ?? 0) * keyGain;
+      this.keyColours[key.index * 3 + 1] = (rgb[1] ?? 0) * keyGain;
+      this.keyColours[key.index * 3 + 2] = (rgb[2] ?? 0) * keyGain;
     }
+    this.field.update(this.keyColours);
     for (const group of this.groups) {
       group.mesh.instanceMatrix.needsUpdate = true;
       // Keys moved: let picking recompute the bounds from the current positions.
       group.mesh.boundingSphere = null;
       group.mesh.boundingBox = null;
-      group.glow.needsUpdate = true;
       group.highlight.needsUpdate = true;
     }
-    if (this.glowMesh.instanceColor) {
-      this.glowMesh.instanceColor.needsUpdate = true;
-    }
-    const n = Math.max(1, this.keyStates.length);
-    this.spill?.color.setRGB((sumR / n) * 0.4, (sumG / n) * 0.4, (sumB / n) * 0.4);
 
+    this.board.updateMatrixWorld();
+    const stripUniform = this.shared['uStripColor']?.value;
     if (this.side) {
       const preview = this.lights.side;
       const rgb = preview ? stripColor(preview) : [0, 0, 0];
       const gain = lightsWake * this.partGain.side;
-      this.side.material.color.setRGB(rgb[0] * gain * 1.3 + 0.02, rgb[1] * gain * 1.3 + 0.02, rgb[2] * gain * 1.3 + 0.025);
-      this.side.haloMaterial.color.setRGB(rgb[0] * gain * 0.9, rgb[1] * gain * 0.9, rgb[2] * gain * 0.9);
+      const [r, g, b] = [(rgb[0] ?? 0) * gain, (rgb[1] ?? 0) * gain, (rgb[2] ?? 0) * gain];
+      // The strip itself is a light source: bright enough to bloom; unlit it reads as frosted plastic.
+      this.side.material.color.setRGB(r * 3.2 + 0.03, g * 3.2 + 0.03, b * 3.2 + 0.035);
+      this.side.haloMaterial.color.setRGB(r * 0.7, g * 0.7, b * 0.7);
+      if (stripUniform instanceof THREE.Color) {
+        stripUniform.setRGB(r, g, b);
+      }
+      const half = this.side.length / 2;
+      const ends: [string, THREE.Mesh | undefined, number][] = [
+        ['uStripL', this.side.strips[0], -1],
+        ['uStripR', this.side.strips[1], 1],
+      ];
+      for (const [name, strip] of ends) {
+        if (!strip) {
+          continue;
+        }
+        const a = this.shared[`${name}0`]?.value;
+        const c = this.shared[`${name}1`]?.value;
+        if (a instanceof THREE.Vector3 && c instanceof THREE.Vector3) {
+          a.set(strip.position.x, strip.position.y, strip.position.z - half).applyMatrix4(this.board.matrixWorld);
+          c.set(strip.position.x, strip.position.y, strip.position.z + half).applyMatrix4(this.board.matrixWorld);
+        }
+      }
+    } else if (stripUniform instanceof THREE.Color) {
+      stripUniform.setRGB(0, 0, 0);
     }
     if (this.logo) {
       const preview = this.lights.logo;
       const rgb = preview ? stripColor(preview) : [0, 0, 0];
       const gain = lightsWake * this.partGain.logo;
-      this.logo.material.color.setRGB(rgb[0] * gain * 1.6, rgb[1] * gain * 1.6, rgb[2] * gain * 1.6);
-      this.logo.haloMaterial.color.setRGB(rgb[0] * gain * 0.5, rgb[1] * gain * 0.5, rgb[2] * gain * 0.5);
+      this.logo.material.color.setRGB((rgb[0] ?? 0) * gain * 3, (rgb[1] ?? 0) * gain * 3, (rgb[2] ?? 0) * gain * 3);
+      this.logo.haloMaterial.color.setRGB((rgb[0] ?? 0) * gain * 0.32, (rgb[1] ?? 0) * gain * 0.32, (rgb[2] ?? 0) * gain * 0.32);
     }
     return active;
   }
@@ -992,21 +1139,69 @@ const sameArt = (a: LegendArt | null, b: LegendArt): boolean =>
   a.legend.lines.length === b.legend.lines.length &&
   a.legend.lines.every((line, idx) => line === b.legend.lines[idx]);
 
-/** Adds per-instance tone, glow, highlight and legend rectangle to a standard material. */
-const injectCapShader = (material: THREE.MeshStandardMaterial, top: boolean): void => {
+/** GLSL shared by every lit surface: the light field and the side strips as two line lights. */
+const SURFACE_LIGHT_GLSL = `${LIGHT_FIELD_GLSL}
+uniform vec3 uStripColor;
+uniform vec3 uStripL0;
+uniform vec3 uStripL1;
+uniform vec3 uStripR0;
+uniform vec3 uStripR1;
+float segmentDistance(vec3 p, vec3 a, vec3 b) {
+  vec3 ab = b - a;
+  float t = clamp(dot(p - a, ab) / max(dot(ab, ab), 1e-4), 0.0, 1.0);
+  return length(p - (a + ab * t));
+}
+vec3 stripLight(vec3 p) {
+  float l = segmentDistance(p, uStripL0, uStripL1);
+  float r = segmentDistance(p, uStripR0, uStripR1);
+  return uStripColor * (1.0 / (1.0 + l * l * 2.8) + 1.0 / (1.0 + r * r * 2.8));
+}
+`;
+
+/**
+ * Adds the board's own light to a standard material: `body` is GLSL that
+ * adds to totalEmissiveRadiance, with vLitBoard (board-space position),
+ * vLitWorld (world position) and vLitNormal (object-space normal).
+ */
+const lightSurface = (material: THREE.MeshStandardMaterial, shared: SharedUniforms, name: string, body: string): void => {
   material.onBeforeCompile = (shader) => {
+    Object.assign(shader.uniforms, shared);
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vLitBoard;\nvarying vec3 vLitWorld;\nvarying vec3 vLitNormal;')
+      .replace(
+        '#include <begin_vertex>',
+        `#include <begin_vertex>
+vLitBoard = transformed;
+vLitWorld = (modelMatrix * vec4(transformed, 1.0)).xyz;
+vLitNormal = normal;`,
+      );
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', `#include <common>\nvarying vec3 vLitBoard;\nvarying vec3 vLitWorld;\nvarying vec3 vLitNormal;\n${SURFACE_LIGHT_GLSL}`)
+      .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>\n${body}`);
+  };
+  material.customProgramCacheKey = () => `lit-${name}`;
+};
+
+/**
+ * Keycaps: per-instance tone, highlight and legend rectangle, and the
+ * backlight. Light from the plate glows through the lower cap wall (the
+ * skirt) and catches the top edges; it never reaches the legend's middle.
+ */
+const injectCapShader = (material: THREE.MeshStandardMaterial, shared: SharedUniforms, top: boolean): void => {
+  material.onBeforeCompile = (shader) => {
+    Object.assign(shader.uniforms, shared);
     shader.vertexShader = shader.vertexShader
       .replace(
         '#include <common>',
         `#include <common>
 attribute vec3 aTone;
-attribute vec3 aGlow;
 attribute float aHighlight;
 attribute vec4 aRect;
 varying vec3 vTone;
-varying vec3 vGlow;
 varying float vHighlight;
-varying float vCapHeight;`,
+varying float vCapHeight;
+varying vec2 vCapUv;
+varying vec2 vBoardXZ;`,
       )
       .replace(
         '#include <uv_vertex>',
@@ -1021,28 +1216,110 @@ vMapUv = aRect.xy + uv * aRect.zw;
         '#include <begin_vertex>',
         `#include <begin_vertex>
 vTone = aTone;
-vGlow = aGlow;
 vHighlight = aHighlight;
-vCapHeight = clamp(position.y / ${CAP_H.toFixed(3)}, 0.0, 1.0);`,
+vCapHeight = clamp(position.y / ${CAP_H.toFixed(3)}, 0.0, 1.0);
+vCapUv = uv;
+#ifdef USE_INSTANCING
+vBoardXZ = (instanceMatrix * vec4(transformed, 1.0)).xz;
+#else
+vBoardXZ = transformed.xz;
+#endif`,
       );
     shader.fragmentShader = shader.fragmentShader
       .replace(
         '#include <common>',
         `#include <common>
 varying vec3 vTone;
-varying vec3 vGlow;
 varying float vHighlight;
-varying float vCapHeight;`,
+varying float vCapHeight;
+varying vec2 vCapUv;
+varying vec2 vBoardXZ;
+${LIGHT_FIELD_GLSL}`,
       )
       .replace('#include <color_fragment>', top ? '#include <color_fragment>' : '#include <color_fragment>\ndiffuseColor.rgb *= vTone;')
       .replace(
         '#include <emissivemap_fragment>',
         `#include <emissivemap_fragment>
-totalEmissiveRadiance += vGlow * ${top ? '0.08' : 'pow(1.0 - vCapHeight, 2.0)'};
+vec3 under = nearLight(vBoardXZ);
+vec3 tint = mix(vec3(1.0), diffuseColor.rgb, 0.55);
+${
+  top
+    ? `float edge = min(min(vCapUv.x, 1.0 - vCapUv.x), min(vCapUv.y, 1.0 - vCapUv.y));
+totalEmissiveRadiance += under * tint * (${LIGHT.rim.toFixed(3)} * (1.0 - smoothstep(0.0, 0.11, edge)) + 0.025);`
+    : `totalEmissiveRadiance += under * tint * (${LIGHT.skirt.toFixed(3)} * pow(clamp(1.0 - vCapHeight, 0.0, 1.0), 2.0) + 0.03);`
+}
 totalEmissiveRadiance += vec3(0.30, 0.42, 0.95) * vHighlight * ${top ? '0.32' : '0.22'};`,
       );
   };
-  material.customProgramCacheKey = () => (top ? 'cap-top' : 'cap-side');
+  material.customProgramCacheKey = () => (top ? 'cap-top-lit' : 'cap-side-lit');
+};
+
+/**
+ * Renders the scene with 4x MSAA into its own target, then copies it into
+ * the composer's plain buffer. Rendering straight into a multisampled
+ * composer buffer does not work with bloom: three.js invalidates the
+ * multisampled colour after resolving it, so bloom's additive blend back
+ * into that buffer would land on nothing.
+ */
+class MultisampledRenderPass extends Pass {
+  private readonly target = new THREE.WebGLRenderTarget(1, 1, {type: THREE.HalfFloatType, samples: 4});
+  private readonly quad = new FullScreenQuad(new THREE.ShaderMaterial({...CopyShader, uniforms: THREE.UniformsUtils.clone(CopyShader.uniforms)}));
+
+  constructor(
+    private readonly scene: THREE.Scene,
+    private readonly camera: THREE.Camera,
+  ) {
+    super();
+    this.needsSwap = false;
+  }
+
+  override setSize(width: number, height: number): void {
+    this.target.setSize(width, height);
+  }
+
+  override render(renderer: THREE.WebGLRenderer, _writeBuffer: THREE.WebGLRenderTarget, readBuffer: THREE.WebGLRenderTarget): void {
+    renderer.setRenderTarget(this.target);
+    renderer.clear();
+    renderer.render(this.scene, this.camera);
+    const material = this.quad.material;
+    if (material instanceof THREE.ShaderMaterial) {
+      const map = material.uniforms['tDiffuse'];
+      if (map) {
+        map.value = this.target.texture;
+      }
+    }
+    renderer.setRenderTarget(readBuffer);
+    this.quad.render(renderer);
+  }
+
+  override dispose(): void {
+    this.target.dispose();
+    this.quad.dispose();
+  }
+}
+
+/** Bloom picks up light sources by their brightest channel, so a saturated red LED blooms like a white one. */
+const pickBrightestChannel = (pass: UnrealBloomPass): void => {
+  const material = pass.materialHighPassFilter;
+  material.fragmentShader = `
+uniform sampler2D tDiffuse;
+uniform vec3 defaultColor;
+uniform float defaultOpacity;
+uniform float luminosityThreshold;
+uniform float smoothWidth;
+varying vec2 vUv;
+void main() {
+  vec4 texel = texture2D(tDiffuse, vUv);
+  float v = max(texel.r, max(texel.g, texel.b));
+  vec4 outputColor = vec4(defaultColor.rgb, defaultOpacity);
+  float alpha = smoothstep(luminosityThreshold, luminosityThreshold + smoothWidth, v);
+  gl_FragColor = mix(outputColor, texel, alpha);
+}`;
+  const smoothWidth = material.uniforms['smoothWidth'];
+  if (smoothWidth) {
+    smoothWidth.value = 0.6;
+  }
+  material.needsUpdate = true;
 };
 
 const capTop = (w: number, h: number) => {

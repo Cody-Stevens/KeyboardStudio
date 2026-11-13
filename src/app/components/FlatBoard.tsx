@@ -8,6 +8,8 @@ interface FlatBoardProps {
   readonly arts: readonly LegendArt[];
   readonly selected: number | null;
   readonly pulse: {readonly matrix: number; readonly at: number} | null;
+  /** Backlight colour per key (CSS), in model key order, or null for an unlit board. */
+  readonly glows?: readonly string[] | null;
   /** Visually hidden: only the keyboard-focus list for the 3D view. */
   readonly hidden: boolean;
   readonly label: string;
@@ -22,7 +24,7 @@ interface FlatBoardProps {
  * the flat view, the fallback without WebGL, and (visually hidden) the
  * keyboard path through the 3D board. Arrow keys move between keys.
  */
-export function FlatBoard({model, arts, selected, pulse, hidden, label, names, onPick, onFocusKey, disabled}: FlatBoardProps) {
+export function FlatBoard({model, arts, selected, pulse, glows, hidden, label, names, onPick, onFocusKey, disabled}: FlatBoardProps) {
   const root = useRef<HTMLDivElement>(null);
   const active = selected ?? model.keys[0]?.matrix ?? 0;
 
@@ -51,7 +53,7 @@ export function FlatBoard({model, arts, selected, pulse, hidden, label, names, o
   return (
     <div
       ref={root}
-      className={`flat-board${hidden ? ' sr-board' : ''}`}
+      className={`flat-board${hidden ? ' sr-board' : ''}${glows ? ' lit' : ''}`}
       role="group"
       aria-label={label}
       style={{aspectRatio: `${model.width} / ${model.height}`, ['--ratio' as string]: model.width / model.height, ['--board-w' as string]: model.width}}
@@ -61,6 +63,7 @@ export function FlatBoard({model, arts, selected, pulse, hidden, label, names, o
         const art = arts[key.index];
         const isSelected = selected === key.matrix;
         const pulsing = pulse?.matrix === key.matrix;
+        const glow = glows?.[key.index];
         return (
           <button
             key={key.matrix}
@@ -81,6 +84,7 @@ export function FlatBoard({model, arts, selected, pulse, hidden, label, names, o
               top: `${(key.y / model.height) * 100}%`,
               width: `${(key.w / model.width) * 100}%`,
               height: `${(key.h / model.height) * 100}%`,
+              ...(glow ? {['--led' as string]: glow} : {}),
             }}
             tabIndex={key.matrix === active ? 0 : -1}
             aria-pressed={isSelected}

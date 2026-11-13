@@ -335,10 +335,14 @@ test('laptop and phone sizes', async ({browser}) => {
   expect(stage?.height ?? 0).toBeGreaterThan(280);
   await shot(laptop, 'laptop-1280x720');
 
-  // A weak GPU: slow frames switch the page to the flat board, with a way back.
-  await laptop.evaluate(() =>
-    (window as unknown as {__keyboardScene: {checkFrameTimes: (s: number[]) => void}}).__keyboardScene.checkFrameTimes(Array.from({length: 20}, () => 0.1)),
-  );
+  // A weak GPU: slow frames first turn bloom off, then switch the page to the flat board, with a way back.
+  const slowFrames = () =>
+    laptop.evaluate(() =>
+      (window as unknown as {__keyboardScene: {checkFrameTimes: (s: number[]) => void}}).__keyboardScene.checkFrameTimes(Array.from({length: 20}, () => 0.1)),
+    );
+  await slowFrames();
+  await expect(laptop.getByTestId('board-3d')).toBeVisible();
+  await slowFrames();
   await expect(laptop.getByTestId('flat-board')).toBeVisible();
   await expect(laptop.getByText('3D ran slowly on this computer')).toBeVisible();
   await laptop.getByRole('button', {name: 'Try 3D again'}).click();

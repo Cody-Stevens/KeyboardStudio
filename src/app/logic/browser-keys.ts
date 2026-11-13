@@ -136,3 +136,20 @@ const MOD_KEY_NAMES: Readonly<Record<ModName, string>> = {ctrl: 'KC_LCTL', shift
 
 /** QMK name of the left-hand key for a modifier, as macros store it. */
 export const modifierKeyName = (mod: ModName): string => MOD_KEY_NAMES[mod];
+
+/**
+ * The key (flat keymap index) that sends `keycode`, looking at `preferLayer`
+ * first and then every other layer, or null. Used to show a typed key on the
+ * model.
+ */
+export const matrixForKeycode = (keymap: readonly (readonly number[])[], preferLayer: number, keycode: number, matrices: readonly number[]): number | null => {
+  const order = [preferLayer, ...keymap.map((_, index) => index).filter((index) => index !== preferLayer)];
+  for (const layer of order) {
+    const codes = keymap[layer];
+    const found = codes ? matrices.find((matrix) => codes[matrix] === keycode) : undefined;
+    if (found !== undefined) {
+      return found;
+    }
+  }
+  return null;
+};

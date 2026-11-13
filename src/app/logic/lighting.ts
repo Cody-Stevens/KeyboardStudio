@@ -1,10 +1,12 @@
 /**
  * Lighting zones: which control does what, and how the on-screen model
- * previews a zone. Only effects whose firmware formula is known are
- * animated (QMK's rgb_matrix formulas, ported below). Every other effect
- * shows its colour and brightness only, and the UI says so.
+ * previews a zone. Only effects whose firmware formula is ported
+ * (rgb-matrix.ts) are animated. Every other effect shows its colour and
+ * brightness only, and the UI says so.
  */
 import {decodeControlValue, isNodeVisible, type MenuControl, type MenuValues, type MenuZone} from '../../core/index.ts';
+import {effectInfo, effectKey} from './effect-info.ts';
+import {effectKind, isPortedEffect, rgbMatrixColor, type LedPoint, type MatrixFrame} from './rgb-matrix.ts';
 
 export interface ZoneControls {
   readonly effect?: MenuControl;
@@ -43,14 +45,8 @@ export const controlLabel = (control: Pick<MenuControl, 'label'>): string => {
 
 export type PreviewMode =
   | 'off'
-  | 'solid'
-  | 'alphas-mods'
-  | 'gradient-y'
-  | 'gradient-x'
-  | 'breathing'
-  | 'cycle-all'
-  | 'cycle-x'
-  | 'cycle-y'
+  /** The effect's firmware formula is ported: the model computes every LED as the keyboard does. */
+  | 'effect'
   /** The effect is not rendered; the model shows its colour. */
   | 'colour-only'
   /** The effect makes its own colours and is not rendered; the model shows a neutral glow. */
@@ -58,6 +54,8 @@ export type PreviewMode =
 
 export interface ZonePreview {
   readonly mode: PreviewMode;
+  /** QMK effect key, such as "solid_reactive". */
+  readonly effect: string;
   /** QMK hue and saturation, 0-255. */
   readonly hue: number;
   readonly sat: number;
@@ -67,28 +65,18 @@ export interface ZonePreview {
   readonly speed: number;
   /** True when the model shows this effect as the firmware does. */
   readonly faithful: boolean;
-  /** True when the preview changes over time and needs animation frames. */
+  /** True when the preview changes over time on its own and needs animation frames. */
   readonly animated: boolean;
+  /** True when the preview reacts to key presses (and animates only after one). */
+  readonly reactive: boolean;
   readonly effectName: string;
+  /** True when the zone uses QMK's rgb_matrix effects. */
+  readonly rgbMatrix: boolean;
   /** True when the keyboard reports a brightness above the definition's range. */
   readonly brightnessOutOfRange: boolean;
 }
 
-const FAITHFUL: Readonly<Record<string, PreviewMode>> = {
-  none: 'off',
-  off: 'off',
-  solid_color: 'solid',
-  solid: 'solid',
-  alphas_mods: 'alphas-mods',
-  gradient_up_down: 'gradient-y',
-  gradient_left_right: 'gradient-x',
-  breathing: 'breathing',
-  cycle_all: 'cycle-all',
-  cycle_left_right: 'cycle-x',
-  cycle_up_down: 'cycle-y',
-};
-
-const ANIMATED: ReadonlySet<PreviewMode> = new Set<PreviewMode>(['breathing', 'cycle-all', 'cycle-x', 'cycle-y']);
+const OFF_EFFECTS = new Set(['none', 'off']);
 
 const rangeValue = (control: MenuControl | undefined, values: MenuValues): {value: number; max: number} | null => {
   if (!control) {
@@ -113,39 +101,57 @@ export const currentEffect = (controls: ZoneControls, values: MenuValues): {labe
   return decoded.type === 'dropdown' ? {label: decoded.label ?? String(decoded.value), value: decoded.value} : null;
 };
 
+/** True when a zone's effect control is QMK's rgb_matrix (so QMK's effect names mean QMK's effects). */
+export const isRgbMatrixZone = (controls: ZoneControls): boolean => /rgb_matrix/i.test(controls.effect?.commandId ?? '');
+
 /** How the model should show a zone with the given values. */
 export const zonePreview = (zone: Pick<MenuZone, 'controls'>, values: MenuValues): ZonePreview => {
   const controls = zoneControls(zone);
-  const effect = currentEffect(controls, values);
-  const effectKey = effect?.label.toLowerCase().replace(/\s+/g, '_') ?? 'solid';
+  const current = currentEffect(controls, values);
+  const effect = current ? effectKey(current.label) : 'solid_color';
+  const rgbMatrix = isRgbMatrixZone(controls);
   const colorVisible = controls.color !== undefined && isNodeVisible(controls.color, values);
-  const known = FAITHFUL[effectKey];
-  const mode: PreviewMode = known ?? (colorVisible || controls.color === undefined ? 'colour-only' : 'own-colours');
   // Only QMK's own rgb_matrix effects follow the ported formulas; vendor
   // effects on other zones with the same name are not guaranteed to.
-  const isRgbMatrix = /rgb_matrix/i.test(controls.effect?.commandId ?? '');
-  const faithful = known !== undefined && (known === 'off' || known === 'solid' || isRgbMatrix);
-
+  const ported = rgbMatrix && isPortedEffect(effect);
+  const usesColour = rgbMatrix && effectInfo(effect, true).colour === 'uses';
+  const mode: PreviewMode = OFF_EFFECTS.has(effect)
+    ? 'off'
+    : ported
+      ? 'effect'
+      : colorVisible || controls.color === undefined || usesColour
+        ? 'colour-only'
+        : 'own-colours';
   const bright = rangeValue(controls.brightness, values);
   const level = mode === 'off' ? 0 : bright ? Math.max(0, Math.min(1, bright.value / Math.max(1, bright.max))) : 1;
   const speedRaw = rangeValue(controls.speed, values);
   const speed = speedRaw ? Math.round((Math.min(speedRaw.value, speedRaw.max) / Math.max(1, speedRaw.max)) * 255) : 128;
   const colorBytes = controls.color ? values[controls.color.commandId] : undefined;
-  const hue = colorBytes?.[0] ?? 0;
-  const sat = colorBytes?.[1] ?? 0;
-  const animatedMode = faithful && ANIMATED.has(mode);
+  const kind = mode === 'effect' ? effectKind(effect) : null;
   return {
     mode,
-    hue,
-    sat,
+    effect,
+    hue: colorBytes?.[0] ?? 0,
+    sat: colorBytes?.[1] ?? 0,
     level,
     speed,
-    faithful,
-    animated: animatedMode,
-    effectName: effect ? effectLabel(effect.label) : 'Unknown',
+    faithful: mode === 'off' || mode === 'effect',
+    animated: kind === 'timed',
+    reactive: kind === 'reactive',
+    effectName: current ? effectLabel(current.label) : 'Unknown',
+    rgbMatrix,
     brightnessOutOfRange: bright !== null && bright.value > bright.max,
   };
 };
+
+/**
+ * For `prefers-reduced-motion`: the preview held still. Breathing effects
+ * would sit dark at time zero, so they hold at full brightness instead.
+ */
+export const stillPreview = (preview: ZonePreview): ZonePreview =>
+  preview.effect === 'breathing' || preview.effect === 'hue_breathing'
+    ? {...preview, effect: 'solid_color', animated: false}
+    : {...preview, animated: false};
 
 // ---------------------------------------------------------------------------
 // Colour math (QMK hsv_to_rgb and rgb_matrix animations)
@@ -171,57 +177,24 @@ export const hueSatCss = (hue: number, sat: number): string => {
   return `rgb(${Math.round(r * 255)} ${Math.round(g * 255)} ${Math.round(b * 255)})`;
 };
 
-export interface LedPoint {
-  /** 0-1 across the board, left to right. */
-  readonly nx: number;
-  /** 0-1 down the board, top to bottom. */
-  readonly ny: number;
-  /** True for modifier keys (QMK's LED_FLAG_MODIFIER). */
-  readonly isMod: boolean;
-}
-
-/** QMK scale16by8: `value * scale / 256`. */
-const scale16by8 = (value: number, scale: number) => (value * scale) / 256;
-
 /**
- * Colour of one backlight LED at `timeMs`, following QMK's rgb_matrix
- * animations (LED points span x 0-224 and y 0-64). Returns black for
- * modes the model does not animate faithfully except colour-only and
- * own-colours, which return a steady colour or a neutral white.
+ * Colour of one backlight LED (0-1 per channel). Ported effects follow
+ * QMK's formulas exactly; colour-only shows a steady colour, own-colours a
+ * neutral white.
  */
-export const backlightColor = (preview: ZonePreview, led: LedPoint, timeMs: number): Rgb => {
-  const v = preview.level * 255;
-  const x = led.nx * 224;
-  const y = led.ny * 64;
-  const {hue, sat, speed} = preview;
+export const backlightColor = (preview: ZonePreview, led: LedPoint, frame: MatrixFrame): Rgb => {
+  const v = Math.round(preview.level * 255);
   switch (preview.mode) {
     case 'off':
       return [0, 0, 0];
-    case 'solid':
     case 'colour-only':
-      return hsvToRgb(hue, sat, v);
+      return hsvToRgb(preview.hue, preview.sat, v);
     case 'own-colours':
       return hsvToRgb(0, 0, v * 0.6);
-    case 'alphas-mods':
-      return hsvToRgb(led.isMod ? hue + speed : hue, sat, v);
-    case 'gradient-y': {
-      const scale = (64 * speed) / 256;
-      return hsvToRgb(hue + scale * (Math.floor(y) >> 4), sat, v);
+    case 'effect': {
+      const rgb = rgbMatrixColor(preview.effect, {hue: preview.hue, sat: preview.sat, val: v, speed: preview.speed}, led, frame);
+      return rgb ? [rgb[0] / 255, rgb[1] / 255, rgb[2] / 255] : hsvToRgb(preview.hue, preview.sat, v);
     }
-    case 'gradient-x': {
-      const scale = (64 * speed) / 256;
-      return hsvToRgb(hue + ((scale * x) >> 5), sat, v);
-    }
-    case 'breathing': {
-      const time = scale16by8(timeMs, speed / 8);
-      return hsvToRgb(hue, sat, v * Math.abs(Math.sin((2 * Math.PI * time) / 256)));
-    }
-    case 'cycle-all':
-      return hsvToRgb(scale16by8(timeMs, speed / 4), sat, v);
-    case 'cycle-x':
-      return hsvToRgb(x - scale16by8(timeMs, speed / 4), sat, v);
-    case 'cycle-y':
-      return hsvToRgb(y - scale16by8(timeMs, speed / 4), sat, v);
     default: {
       const unreachable: never = preview.mode;
       return unreachable;
@@ -246,6 +219,9 @@ export const stripColor = (preview: ZonePreview): Rgb => {
 export const previewNote = (preview: ZonePreview): string => {
   if (preview.mode === 'off') {
     return 'Off.';
+  }
+  if (preview.faithful && preview.reactive) {
+    return 'The model shows this effect. Type, or click keys on the model, to try it.';
   }
   if (preview.faithful) {
     return 'The model shows this effect.';

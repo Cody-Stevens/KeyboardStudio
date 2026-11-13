@@ -175,27 +175,38 @@ describe('lighting', () => {
     expect(effectLabel('solid_color')).toBe('Solid colour');
   });
 
-  it('shows the real backlight (solid reactive, brightness 255) honestly', () => {
+  it('shows the real backlight (solid reactive, brightness 255) from the firmware formula', () => {
     const backlight = getMenuZones(definition)[1]!;
     const preview = zonePreview(backlight, menuValuesFromSeed());
     expect(preview.effectName).toBe('Solid reactive');
-    expect(preview.mode).toBe('colour-only');
-    expect(preview.faithful).toBe(false);
+    expect(preview.mode).toBe('effect');
+    expect(preview.faithful).toBe(true);
     expect(preview.animated).toBe(false);
+    expect(preview.reactive).toBe(true);
     expect(preview.brightnessOutOfRange).toBe(true);
     expect(preview.level).toBe(1);
+    expect(previewNote(preview)).toMatch(/Type, or click keys on the model/);
+  });
+
+  it('shows the colour, and says so, for effects it cannot compute', () => {
+    const backlight = getMenuZones(definition)[1]!;
+    const preview = zonePreview(backlight, {...menuValuesFromSeed(), id_qmk_rgb_matrix_effect: [42]});
+    expect(preview.effectName).toBe('Starlight');
+    expect(preview.mode).toBe('colour-only');
+    expect(preview.faithful).toBe(false);
     expect(previewNote(preview)).toMatch(/shows the colour/);
   });
 
   it('animates breathing on the backlight from the QMK formula', () => {
     const backlight = getMenuZones(definition)[1]!;
     const preview = zonePreview(backlight, {...menuValuesFromSeed(), id_qmk_rgb_matrix_effect: [5], id_qmk_rgb_matrix_brightness: [80]});
-    expect(preview.mode).toBe('breathing');
+    expect(preview.mode).toBe('effect');
+    expect(preview.effect).toBe('breathing');
     expect(preview.faithful && preview.animated).toBe(true);
     expect(preview.level).toBe(0.5);
-    const led = {nx: 0.5, ny: 0.5, isMod: false};
-    expect(backlightColor(preview, led, 0)).toEqual([0, 0, 0]);
-    const lit = backlightColor(preview, led, 1000);
+    const led = {x: 112, y: 32, index: 0, isMod: false};
+    expect(backlightColor(preview, led, {timer: 0, hits: []})).toEqual([0, 0, 0]);
+    const lit = backlightColor(preview, led, {timer: 1000, hits: []});
     expect(Math.max(...lit)).toBeGreaterThan(0);
   });
 

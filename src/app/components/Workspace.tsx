@@ -2,7 +2,7 @@ import {useStore} from '@nanostores/react';
 import {useEffect} from 'react';
 import {undoLatest} from '../state/changes.ts';
 import {$session} from '../state/session.ts';
-import {$hint, $logOpen, $mode, $placing, $selected, showHint, toggleView} from '../state/ui.ts';
+import {$hint, $logOpen, $mode, $placing, $selected, $typingPreview, showHint, toggleView} from '../state/ui.ts';
 import {Dock} from './Dock.tsx';
 import {Stage} from './Stage.tsx';
 import {TopBar} from './TopBar.tsx';
@@ -43,7 +43,7 @@ export function Workspace() {
         }
         return;
       }
-      if (!event.ctrlKey && !event.metaKey && !event.altKey && event.key.toLowerCase() === 'v') {
+      if (!event.ctrlKey && !event.metaKey && !event.altKey && event.key.toLowerCase() === 'v' && !$typingPreview.get()) {
         toggleView();
         event.preventDefault();
       }

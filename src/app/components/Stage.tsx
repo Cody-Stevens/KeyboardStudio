@@ -2,6 +2,9 @@ import {useStore} from '@nanostores/react';
 import {useEffect, useMemo, useState} from 'react';
 import type {BoardPart} from '../../core/index.ts';
 import {keycodeDanger} from '../../core/index.ts';
+import {matrixForKeycode, qmkCodeForEvent} from '../logic/browser-keys.ts';
+import {backlightColor, stillPreview} from '../logic/lighting.ts';
+import {ledPoints} from '../logic/rgb-matrix.ts';
 import {canUseWebGl} from '../scene/webgl.ts';
 import {keyArts} from '../state/arts.ts';
 import {saveMacro, targetLayers} from '../state/changes.ts';
@@ -14,20 +17,30 @@ import {
   $focusedPart,
   $hint,
   $hoveredPart,
+  $keyHit,
   $layer,
   $mode,
   $placing,
   $pressPulse,
   $selected,
+  $typingPreview,
   $viewChoice,
+  hitKey,
   pulseKey,
   setView,
   showHint,
 } from '../state/ui.ts';
-import {Board3D} from './Board3D.tsx';
+import {Board3D, lightsFor} from './Board3D.tsx';
 import {FlatBoard} from './FlatBoard.tsx';
 
 type ThreeState = 'loading' | 'ready' | 'unavailable';
+
+/** True while a "press a key" capture or a macro recording owns the keyboard (see Workspace). */
+const isCapturing = () => document.documentElement.dataset['capturing'] === 'true';
+
+const isTextEntry = (target: EventTarget | null) =>
+  target instanceof HTMLElement &&
+  (target.isContentEditable || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT' || (target instanceof HTMLInputElement && target.type !== 'range' && target.type !== 'checkbox'));
 
 const useNarrow = () => {
   const query = '(max-width: 760px)';
@@ -69,6 +82,49 @@ export function Stage() {
   }, [threeState]);
 
   const arts = useMemo(() => (session ? keyArts(session, layer) : []), [session, layer, macroNames]);
+  const keyHit = useStore($keyHit);
+  const backlight = useMemo(() => (session ? lightsFor(session).backlight : null), [session]);
+  const typingPreview = mode === 'lighting' && backlight?.reactive === true && !env.reducedMotion && !session?.stale;
+
+  // The flat board's lighting: each key's colour held still (the 3D board animates it).
+  const glows = useMemo(() => {
+    if (!session || !backlight || mode !== 'lighting') {
+      return null;
+    }
+    const still = stillPreview(backlight);
+    const leds = ledPoints(session.model.keys.map((key) => ({cx: key.cx, cy: key.cy, isMod: key.tone !== 'alpha'})));
+    return leds.map((led) => {
+      const [r, g, b] = backlightColor(still, led, {timer: 0, hits: []});
+      return `rgb(${Math.round(r * 255)} ${Math.round(g * 255)} ${Math.round(b * 255)})`;
+    });
+  }, [session, backlight, mode]);
+
+  // Typing previews a reactive effect on the model, the way the keyboard reacts to the same key.
+  useEffect(() => {
+    $typingPreview.set(typingPreview);
+    if (!typingPreview || !session) {
+      return;
+    }
+    const matrices = session.model.keys.map((key) => key.matrix);
+    const onKeyDown = (event: KeyboardEvent) => {
+      const rangeKey = event.target instanceof HTMLInputElement && event.target.type === 'range' && /^(Arrow|Page|Home|End)/.test(event.key);
+      if (event.repeat || isCapturing() || isTextEntry(event.target) || rangeKey) {
+        return;
+      }
+      const code = qmkCodeForEvent(event);
+      const value = code === null ? null : session.table.valueOf(code);
+      const matrix = value === null ? null : matrixForKeycode(session.keymap, $layer.get(), value, matrices);
+      if (matrix !== null) {
+        hitKey(matrix);
+        pulseKey(matrix);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      $typingPreview.set(false);
+    };
+  }, [typingPreview, session]);
 
   if (!session) {
     return null;
@@ -98,6 +154,8 @@ export function Stage() {
     }
     if ($mode.get() === 'lighting') {
       $focusedPart.set('backlight');
+      hitKey(matrix);
+      pulseKey(matrix);
       return;
     }
     if ($mode.get() !== 'keys') {
@@ -113,7 +171,7 @@ export function Stage() {
   };
 
   return (
-    <section className={`stage${placing ? ' placing' : ''}`} aria-label="Keyboard">
+    <section className={`stage${placing ? ' placing' : ''}`} id="stage" aria-label="Keyboard">
       <div className="stage-top">
         {(mode === 'keys' || mode === 'macros') && (
           <div className="layer-tabs" role="radiogroup" aria-label="Layer to edit">
@@ -158,6 +216,7 @@ export function Stage() {
             selected={selected}
             focused={focusedKey}
             pulse={pulse}
+            keyHit={keyHit}
             flat={!want3d}
             visible={!domVisible}
             intro={intro}
@@ -181,6 +240,7 @@ export function Stage() {
             arts={arts}
             selected={selected}
             pulse={pulse}
+            glows={domVisible ? glows : null}
             hidden={!domVisible}
             label={`Keys on ${layerMeta?.name ?? `layer ${layer}`}`}
             names={(matrix) => physicalKeyName(session, matrix)}
@@ -225,6 +285,11 @@ export function Stage() {
           </p>
         )}
         {flatReason === 'no-webgl' && !narrow && <p className="stage-note">This browser cannot draw 3D, so the flat board is shown.</p>}
+        {domVisible && mode === 'lighting' && !hint && (backlight?.animated || backlight?.reactive) && (
+          <p className="stage-note" data-testid="flat-lighting-note">
+            The flat board holds the lighting still. {can3d ? 'Switch to 3D to see it move.' : 'Watch your keyboard to see it move.'}
+          </p>
+        )}
       </div>
 
       {phase.name === 'lost' && (

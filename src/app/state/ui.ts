@@ -19,6 +19,13 @@ export const $focusedKey = atom<number | null>(null);
 export const $pressPulse = atom<{readonly matrix: number; readonly at: number} | null>(null);
 export const pulseKey = (matrix: number): void => $pressPulse.set({matrix, at: performance.now()});
 
+/** A key press for the reactive lighting preview (typed on the keyboard or clicked on the model). */
+export const $keyHit = atom<{readonly matrix: number; readonly at: number} | null>(null);
+export const hitKey = (matrix: number): void => $keyHit.set({matrix, at: performance.now()});
+
+/** True while typing previews a reactive backlight effect, so letter shortcuts (V) stay out of the way. */
+export const $typingPreview = atom(false);
+
 export type ViewKind = '3d' | 'flat';
 const isView = (value: unknown): value is ViewKind => value === '3d' || value === 'flat';
 /** The view the user chose. The page may still show flat if 3D is unavailable. */

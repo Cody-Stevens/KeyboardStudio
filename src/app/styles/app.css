@@ -737,6 +737,28 @@ input[type='range'] {
   background: var(--cap-accent);
   color: var(--cap-ink-light);
 }
+/*
+ * Lit flat board: each key's backlight colour, held still. The light sits on
+ * a layer under every cap (z-index 0 below the tops' 1), so it shows in the
+ * gaps without washing over neighbouring legends; the cap's lower edge picks
+ * up a little of it.
+ */
+.flat-board.lit .cap::before {
+  content: '';
+  position: absolute;
+  z-index: 0;
+  inset: 6%;
+  border-radius: calc(var(--u) * 0.12);
+  background: var(--led, transparent);
+  box-shadow: 0 0 calc(var(--u) * 0.16) calc(var(--u) * 0.06) color-mix(in srgb, var(--led, transparent) 70%, transparent);
+}
+.flat-board.lit .cap-top {
+  z-index: 1;
+  box-shadow:
+    inset 0 calc(var(--u) * -0.07) 0 color-mix(in srgb, var(--led, #000) 35%, rgb(0 0 0 / 0.2)),
+    inset 0 calc(var(--u) * 0.02) 0 rgb(255 255 255 / 0.5),
+    0 calc(var(--u) * 0.03) calc(var(--u) * 0.05) rgb(0 0 0 / 0.3);
+}
 .cap:hover .cap-top {
   transform: translateY(calc(var(--u) * -0.03));
 }

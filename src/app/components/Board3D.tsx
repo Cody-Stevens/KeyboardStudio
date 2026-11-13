@@ -12,6 +12,8 @@ interface Board3DProps {
   readonly selected: number | null;
   readonly focused: number | null;
   readonly pulse: {readonly matrix: number; readonly at: number} | null;
+  /** The latest key press for reactive lighting effects. */
+  readonly keyHit: {readonly matrix: number; readonly at: number} | null;
   readonly flat: boolean;
   readonly visible: boolean;
   readonly intro: boolean;
@@ -46,7 +48,7 @@ export function Board3D(props: Board3DProps) {
   const scene = useRef<KeyboardScene | null>(null);
   const latest = useRef(props);
   latest.current = props;
-  const {session, arts, layer, selected, focused, pulse, flat, highlightPart, visible} = props;
+  const {session, arts, layer, selected, focused, pulse, keyHit, flat, highlightPart, visible} = props;
   const model = session.model;
 
   useEffect(() => {
@@ -133,6 +135,12 @@ export function Board3D(props: Board3DProps) {
       scene.current?.press(pulse.matrix);
     }
   }, [pulse]);
+
+  useEffect(() => {
+    if (keyHit) {
+      scene.current?.keyHit(keyHit.matrix);
+    }
+  }, [keyHit]);
 
   useEffect(() => {
     scene.current?.setLights(lightsFor(session));
