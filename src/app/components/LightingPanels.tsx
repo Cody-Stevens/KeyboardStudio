@@ -1,7 +1,9 @@
 import {useStore} from '@nanostores/react';
-import {useEffect, useRef} from 'react';
+import {useEffect, useRef, type ReactNode} from 'react';
 import {decodeControlValue, isNodeVisible, type BoardZone, type ControlInput, type MenuControl} from '../../core/index.ts';
-import {controlLabel, effectLabel, hueSatCss, previewNote, zoneControls, zonePreview} from '../logic/lighting.ts';
+import {effectInfo, effectSentence, groupEffects} from '../logic/effect-info.ts';
+import {controlLabel, effectLabel, hueSatCss, isRgbMatrixZone, previewNote, zoneControls, zonePreview, type ZonePreview} from '../logic/lighting.ts';
+import {reactiveFadeMs, reactiveFlashHue} from '../logic/rgb-matrix.ts';
 import {$entryStatuses, $log, setLighting} from '../state/changes.ts';
 import {store, type SessionView} from '../state/session.ts';
 import {$focusedPart, $hoveredPart} from '../state/ui.ts';
@@ -67,6 +69,8 @@ function ZonePanel({zone, session, focused}: {readonly zone: BoardZone; readonly
     control === roles.effect ? 0 : control === roles.color ? 1 : control === roles.brightness ? 2 : control === roles.speed ? 3 : 4;
   const visible = zone.zone.controls.filter((control) => isNodeVisible(control, values)).sort((a, b) => rank(a) - rank(b));
   const stale = session.stale;
+  const rgbMatrix = isRgbMatrixZone(roles);
+  const colourHidden = roles.color !== undefined && !isNodeVisible(roles.color, values);
 
   useEffect(() => {
     // A click on this zone on the model: bring its panel into view and focus its first control.
@@ -125,9 +129,24 @@ function ZonePanel({zone, session, focused}: {readonly zone: BoardZone; readonly
       </header>
       <div className="zone-controls">
         {visible.map((control) => (
-          <Control key={control.commandId} control={control} session={session} isEffect={control === roles.effect} disabled={stale} onWrite={write} />
+          <Control
+            key={control.commandId}
+            control={control}
+            session={session}
+            isEffect={control === roles.effect}
+            rgbMatrix={rgbMatrix}
+            disabled={stale}
+            onWrite={write}
+            after={control === roles.color && preview.effect === 'solid_reactive' && rgbMatrix ? <FlashColour preview={preview} /> : null}
+          />
         ))}
-        {roles.color && !isNodeVisible(roles.color, values) && preview.mode !== 'off' && <p className="muted small">{preview.effectName} picks its own colours.</p>}
+        {colourHidden && preview.mode !== 'off' && (
+          <p className="muted small" data-testid={`colour-hidden-${zone.part}`}>
+            {rgbMatrix && effectInfo(preview.effect, true).colour === 'uses'
+              ? `This keyboard’s settings hide the colour for ${preview.effectName}, but the effect still uses the colour set last. To change it, pick another effect, set the colour, then come back.`
+              : `${preview.effectName} makes its own colours.`}
+          </p>
+        )}
         {preview.mode === 'off' && <p className="muted small">Off. Choose an effect to turn it on.</p>}
       </div>
       <footer className="zone-foot">
@@ -137,15 +156,48 @@ function ZonePanel({zone, session, focused}: {readonly zone: BoardZone; readonly
   );
 }
 
+/**
+ * Solid reactive: the colour a pressed key flashes, worked out with the
+ * firmware's own rule (the hue turned 64 of 255 steps), so people see it
+ * before they type and know it cannot be set on its own.
+ */
+function FlashColour({preview}: {readonly preview: ZonePreview}) {
+  const flashHue = reactiveFlashHue(preview.hue);
+  const fade = reactiveFadeMs(preview.speed);
+  const seconds = fade < 10_000 ? (fade / 1000).toFixed(1) : String(Math.round(fade / 1000));
+  return (
+    <div className="flash-colour" data-testid="flash-colour" data-flash-hue={flashHue}>
+      <span className="flash-swatches" aria-hidden="true">
+        <span className="flash-swatch" style={{background: hueSatCss(preview.hue, preview.sat)}} />
+        <svg className="flash-arrow" viewBox="0 0 16 10">
+          <path d="M1 5h12m-4-4 4 4-4 4" />
+        </svg>
+        <span className="flash-swatch" style={{background: hueSatCss(flashHue, preview.sat)}} />
+      </span>
+      <div>
+        <p className="flash-title">Pressed keys flash this colour</p>
+        <p className="muted small">
+          {preview.sat < 24
+            ? 'With white light the flash cannot be seen: there is no colour to turn. Pick a colour to see it.'
+            : `It follows your colour, a quarter turn around the colour wheel, and fades back in ${seconds} s at this speed. The keyboard has no setting for it.`}
+        </p>
+      </div>
+    </div>
+  );
+}
+
 interface ControlProps {
   readonly control: MenuControl;
   readonly session: SessionView;
   readonly isEffect: boolean;
+  readonly rgbMatrix: boolean;
   readonly disabled: boolean;
   readonly onWrite: (control: MenuControl, input: ControlInput, throttled: boolean) => void;
+  /** Shown under the control, inside its field. */
+  readonly after?: ReactNode;
 }
 
-function Control({control, session, isEffect, disabled, onWrite}: ControlProps) {
+function Control({control, session, isEffect, rgbMatrix, disabled, onWrite, after}: ControlProps) {
   const bytes = session.menuValues[control.commandId];
   const label = isEffect ? 'Effect' : controlLabel(control);
   const id = `control-${control.commandId}`;
@@ -154,25 +206,57 @@ function Control({control, session, isEffect, disabled, onWrite}: ControlProps) 
   }
   const decoded = decodeControlValue(control, bytes);
   switch (decoded.type) {
-    case 'dropdown':
-      return (
-        <label className="field" htmlFor={id}>
-          <span className="field-label">{label}</span>
-          <select
-            id={id}
-            value={decoded.value}
-            disabled={disabled}
-            onChange={(event) => onWrite(control, {type: 'dropdown', value: Number(event.target.value)}, false)}
-            data-testid={id}
-          >
-            {(control.choices ?? []).map((choice) => (
-              <option key={choice.label} value={choice.value[0]}>
-                {effectLabel(choice.label)}
-              </option>
-            ))}
-          </select>
-        </label>
+    case 'dropdown': {
+      const choices = (control.choices ?? []).map((choice) => ({label: choice.label, value: choice.value[0] ?? 0}));
+      const option = (choice: {readonly label: string; readonly value: number}) => (
+        <option key={choice.label} value={choice.value}>
+          {effectLabel(choice.label)}
+        </option>
       );
+      const select = (
+        <select
+          id={id}
+          value={decoded.value}
+          disabled={disabled}
+          aria-describedby={isEffect ? `${id}-about` : undefined}
+          onChange={(event) => onWrite(control, {type: 'dropdown', value: Number(event.target.value)}, false)}
+          data-testid={id}
+        >
+          {isEffect
+            ? groupEffects(choices, rgbMatrix).map((group) =>
+                group.label ? (
+                  <optgroup key={group.id} label={group.label}>
+                    {group.choices.map(option)}
+                  </optgroup>
+                ) : (
+                  group.choices.map(option)
+                ),
+              )
+            : choices.map(option)}
+        </select>
+      );
+      if (!isEffect) {
+        return (
+          <label className="field" htmlFor={id}>
+            <span className="field-label">{label}</span>
+            {select}
+          </label>
+        );
+      }
+      // Effects: grouped by what they do, with one plain line on the chosen one.
+      const chosen = choices.find((choice) => choice.value === decoded.value);
+      return (
+        <div className="field">
+          <label className="field-label" htmlFor={id}>
+            {label}
+          </label>
+          {select}
+          <p className="effect-about" id={`${id}-about`} data-testid={`${id}-about`}>
+            {effectSentence(chosen?.label ?? decoded.label ?? '', rgbMatrix)}
+          </p>
+        </div>
+      );
+    }
     case 'range': {
       const [min, max] = control.range ?? [0, 255];
       const outOfRange = decoded.value > max || decoded.value < min;
@@ -237,6 +321,7 @@ function Control({control, session, isEffect, disabled, onWrite}: ControlProps) 
             onChange={(event) => onWrite(control, {type: 'color', hue: decoded.hue, sat: Number(event.target.value)}, true)}
             data-testid={`${id}-sat`}
           />
+          {after}
         </div>
       );
     case 'toggle':
